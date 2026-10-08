@@ -10,12 +10,13 @@
 import argparse, math, os
 import numpy as np
 from PIL import Image, ImageDraw
+from scipy import ndimage as ndi
 
 PX_CM = 150 / 2.54
 
 # Размер элемента на ткани, см. Калибр = корень из площади НЕПРОЗРАЧНЫХ пикселей (масса фигуры),
 # поэтому позы одного зайца получаются одного размера, а не по габаритам.
-CM = {'заяц': 9.0, 'бабочка': 3.2, 'малиновка': 5.5, 'анемона': 6.5, 'бутон': 5.5,
+CM = {'заяц': 9.0, 'бабочка': 3.2, 'малиновка': 2.6, 'синица': 2.6, 'воробей': 2.6, 'птица': 2.6, 'анемона': 6.5, 'бутон': 5.5,
       'папоротник': 5.5, 'эвкалипт': 5.5, 'ягоды': 5.5, 'дуб': 5.5, 'колос': 4.5, 'филлер': 5.0}
 
 LAYERS = {
@@ -42,6 +43,7 @@ ap.add_argument('--trellis-w', type=float, default=1.8)  # толщина лин
 ap.add_argument('--land-dx', type=float, default=0.0)    # смещение туловища бабочки от кончика носа (+ от морды), доля её ширины
 ap.add_argument('--tilt', type=float, default=14)        # наклон бабочки по часовой стрелке, градусов
 ap.add_argument('--land-gap', type=float, default=0.0)   # поднять бабочку над точкой касания, доля её высоты
+ap.add_argument('--no-birds', action='store_true')         # птицы на изгибе бутонов
 ap.add_argument('--no-butterfly', action='store_true')  # бабочка на носу спящего зайца
 ap.add_argument('--check', action='store_true')
 a = ap.parse_args()
@@ -61,7 +63,7 @@ def prefix_of(name):
 def load(name, cm):
     im = Image.open(os.path.join(a.shelf, name + '.png')).convert('RGBA')
     bb = im.getchannel('A').point(lambda v: 255 if v > 10 else 0).getbbox()
-    im = im.crop(bb)
+    im = strip_perch(im.crop(bb), name)
     mass = math.sqrt((np.array(im.getchannel('A')) > 40).sum())
     k = cm * a.size * PX_CM * S / mass
     return im.resize((max(1, int(im.width * k)), max(1, int(im.height * k))), Image.LANCZOS), k
@@ -87,6 +89,57 @@ def nose(el, flipped):
     tip = cols[0] if flipped else cols[-1]
     ys = np.nonzero(al[:, band].any(axis=1))[0]
     return int(tip), int(ys.min())
+
+
+# Птицы нарисованы вместе с веточкой. Здесь ветка и листочки срезаются (границы — доли габарита),
+# чтобы птица села на изгиб стебля. Новые птицы без веточки (файлы синица_*, воробей_*, птица_*) не режутся.
+STRIP = {  # имя: (низ, [(x0, y0, x1, y1) области на удаление], удалять_зелёное_слева)
+    'малиновка_1': (0.795, [(0.78, 0.62, 1.0, 1.0)], None),
+    'малиновка_2': (0.795, [(0.86, 0.66, 1.0, 1.0)], (0.27, 0.50)),
+}
+
+
+def strip_perch(im, name):
+    if name not in STRIP:
+        return im
+    ybot, boxes, green = STRIP[name]
+    arr = np.array(im)
+    h, w = arr.shape[:2]
+    arr[int(ybot * h):, :, 3] = 0
+    for x0, y0, x1, y1 in boxes:
+        arr[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w), 3] = 0
+    if green:                                    # зелёные листочки слева от груди (у малиновки_2)
+        gx, gy = green
+        reg = arr[int(gy * h):, :int(gx * w)]
+        mask = reg[..., 1].astype(int) > reg[..., 0].astype(int) + 5
+        reg[..., 3][mask] = 0
+    lab, n = ndi.label(arr[..., 3] > 20, structure=np.ones((3, 3)))
+    if n > 1:                                    # остаётся только сама птица
+        sizes = ndi.sum(arr[..., 3] > 20, lab, range(1, n + 1))
+        arr[..., 3][lab != (np.argmax(sizes) + 1)] = 0
+    out = Image.fromarray(arr)
+    return out.crop(out.getchannel('A').point(lambda v: 255 if v > 10 else 0).getbbox())
+
+
+def apex(el):
+    """Верхняя точка изгиба бутона: x, верхний y и толщина стебля в этой точке."""
+    al = np.array(el.getchannel('A')) > 40
+    rows = np.nonzero(al.any(axis=1))[0]
+    r0 = rows[0]
+    xs = np.nonzero(al[r0:r0 + 3].any(axis=0))[0]
+    ax = int(xs.mean())
+    col = al[r0:, ax]
+    t = int(np.argmin(col)) if (~col).any() else len(col)
+    return ax, int(r0), t
+
+
+def foot_anchor(bird):
+    """Низ птицы: x центра лапок и нижняя строка."""
+    al = np.array(bird.getchannel('A')) > 40
+    rows = np.nonzero(al.any(axis=1))[0]
+    r1 = rows[-1]
+    xs = np.nonzero(al[max(0, r1 - 4):r1 + 1].any(axis=0))[0]
+    return int(xs.mean()), int(r1)
 
 
 # туловище бабочки (грудь и брюшко) в исходной ориентации (голова справа), доли габарита
@@ -142,6 +195,9 @@ if a.trellis:                                            # ромбическа�
 
 cache = {}
 sizes = []
+bird_n = 0
+BIRDS = sorted(os.path.splitext(f)[0] for f in os.listdir(a.shelf)
+               if f.endswith('.png') and prefix_of(f) in ('малиновка', 'синица', 'воробей', 'птица'))
 for layer in a.layers.split(','):
     names = LAYERS[layer]
     for jr in range(a.ny // 2):
@@ -163,7 +219,25 @@ for layer in a.layers.split(','):
                     half[side] = cache[nb].width / 2
                 w_me = cache[name].width / 2
                 flip = (dx - w_me - half['l']) > (dx - w_me - half['r'])
+            if name == 'заяц_прыгает' and layer == 'A' and not a.no_birds and BIRDS:
+                # исходно прыгает вправо, задние лапы слева: лапы разворачиваем от бутонов с птицами
+                bl = sum(LAYERS['B'][(((i - 1) % a.nx) + jb) % 3].startswith('бутон') for jb in (jr - 1, jr))
+                br = sum(LAYERS['B'][(i + jb) % 3].startswith('бутон') for jb in (jr - 1, jr))
+                if bl != br:
+                    flip = bl > br
             el = cache[name].transpose(Image.FLIP_LEFT_RIGHT) if flip else cache[name]
+            if name.startswith('бутон') and not a.no_birds and BIRDS:   # птица садится на верхний изгиб, стебель закрывает лапки
+                bn = BIRDS[bird_n % len(BIRDS)]
+                if bn not in cache:
+                    cache[bn], k = load(bn, CM[prefix_of(bn)])
+                    sizes.append((bn, cache[bn].size, k))
+                bird = cache[bn].transpose(Image.FLIP_LEFT_RIGHT) if bird_n % 4 in (1, 2) else cache[bn]
+                ax, ay, t = apex(el)
+                fx, fy = foot_anchor(bird)
+                bx = cx - el.width / 2 + ax - fx
+                by = cy - el.height / 2 + ay + 0.5 * t - fy
+                paste(bird, bx + bird.width / 2, by + bird.height / 2)
+                bird_n += 1
             paste(el, cx, cy)
             if name == 'заяц_спит' and not a.no_butterfly:     # бабочка (в 3/4, смотрит к морде) на носу
                 if 'бабочка_2' not in cache:
