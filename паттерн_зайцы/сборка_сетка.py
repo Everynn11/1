@@ -16,7 +16,7 @@ PX_CM = 150 / 2.54
 
 # Размер элемента на ткани, см. Калибр = корень из площади НЕПРОЗРАЧНЫХ пикселей (масса фигуры),
 # поэтому позы одного зайца получаются одного размера, а не по габаритам.
-CM = {'заяц': 9.0, 'бабочка': 3.2, 'малиновка': 2.6, 'синица': 2.6, 'воробей': 2.6, 'птица': 2.6, 'анемона': 6.5, 'бутон': 5.5,
+CM = {'заяц': 9.0, 'бабочка': 2.67, 'малиновка': 3.9, 'синица': 3.9, 'воробей': 3.9, 'птица': 3.9, 'анемона': 6.5, 'бутон': 5.5,
       'папоротник': 5.5, 'эвкалипт': 5.5, 'ягоды': 5.5, 'дуб': 5.5, 'колос': 4.5, 'филлер': 5.0}
 
 LAYERS = {
@@ -43,6 +43,7 @@ ap.add_argument('--trellis-w', type=float, default=1.8)  # толщина лин
 ap.add_argument('--land-dx', type=float, default=0.0)    # смещение туловища бабочки от кончика носа (+ от морды), доля её ширины
 ap.add_argument('--tilt', type=float, default=14)        # наклон бабочки по часовой стрелке, градусов
 ap.add_argument('--land-gap', type=float, default=0.0)   # поднять бабочку над точкой касания, доля её высоты
+ap.add_argument('--bud-dy', type=float, default=2.2)       # на сколько см опустить бутон с птицей
 ap.add_argument('--no-birds', action='store_true')         # птицы на изгибе бутонов
 ap.add_argument('--no-butterfly', action='store_true')  # бабочка на носу спящего зайца
 ap.add_argument('--check', action='store_true')
@@ -219,6 +220,8 @@ for layer in a.layers.split(','):
                     half[side] = cache[nb].width / 2
                 w_me = cache[name].width / 2
                 flip = (dx - w_me - half['l']) > (dx - w_me - half['r'])
+            if name.startswith('бутон') and not a.no_birds and BIRDS:
+                cy += a.bud_dy * PX_CM * S
             if name == 'заяц_прыгает' and layer == 'A' and not a.no_birds and BIRDS:
                 # исходно прыгает вправо, задние лапы слева: лапы разворачиваем от бутонов с птицами
                 bl = sum(LAYERS['B'][(((i - 1) % a.nx) + jb) % 3].startswith('бутон') for jb in (jr - 1, jr))
