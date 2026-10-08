@@ -12,6 +12,7 @@ ap.add_argument('--seed', type=int, default=3)
 ap.add_argument('--amp', type=float, default=0.05)      # амплитуда волны лозы, доля размера
 ap.add_argument('--waves', type=int, default=2)         # волн на период
 ap.add_argument('--flowers', type=int, default=6)       # цветов на одну лозу
+ap.add_argument('--segments', action='store_true')       # раскрасить звенья лоз между узлами разными цветами
 ap.add_argument('--stems-only', action='store_true')    # только лозы: без цветов, листьев и побегов
 ap.add_argument('--gap', type=float, default=0.012)     # зазор между метками, доля размера
 a = ap.parse_args()
@@ -249,6 +250,29 @@ for k, (i, j, x, y, ia, ib) in enumerate(nodes):
         return path
     stroke(part(0.024), THICK * 1.9, (255, 255, 255))       # белый ореол (короткий)
     stroke(part(0.070), THICK, VINE_COL)                    # верхняя лоза (длиннее ореола: без щербин)
+
+if a.segments:
+    import colorsys
+    # индексы узлов вдоль каждой лозы
+    idxs = {i: [] for i in range(len(VINES))}
+    for (i, j, x, y, ia, ib) in nodes:
+        idxs[i].append(ia); idxs[j].append(ib)
+    step_px_ = R / len(VINES[0]['pts'])
+    k = 0
+    total = sum(len(v) for v in idxs.values())
+    for vi, v in enumerate(VINES):
+        cuts = sorted(set(int(round(c / 6)) * 6 for c in idxs[vi]))
+        cuts = cuts + [cuts[0] + len(v['pts'])]
+        for a_, b_ in zip(cuts[:-1], cuts[1:]):
+            h = (k * 0.618) % 1.0
+            col = tuple(int(255 * c) for c in colorsys.hsv_to_rgb(h, 0.75, 0.82))
+            pts = [v['pts'][o % len(v['pts'])] for o in range(a_ + 12, b_ - 12)]
+            path = [np.array(pts[0])]
+            for p_ in pts[1:]:
+                path.append(path[-1] + ((p_ - path[-1] + R / 2) % R - R / 2))
+            stroke(path, THICK * 1.6, col)
+            k += 1
+    print('звеньев:', k)
 
 # цветы поверх
 for fx in flowers:
