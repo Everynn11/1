@@ -1,10 +1,11 @@
-# Паттерн «заяц на цветущем лугу»: ромбическая сетка (half-drop), бесшовно (тор).
-# Никакой случайности: у каждого элемента свой фиксированный размер, позы зайцев идут по схеме.
+# Паттерн «заяц на цветущем лугу»: шахматная сетка, бесшовно (тор).
+# У каждого элемента свой фиксированный размер, позы и растения расставлены по схеме без повторов рядом.
 #
-# Узлы сетки (nx столбцов, ny строк, ny чётное; строки чередуются со сдвигом на полшага):
-#   A — чётные строки, без сдвига       → зайцы (позы по схеме, бабочка на носу спящего)
-#   B — нечётные строки, сдвиг на ½     → дуб, ягоды, бутон (с птицей на изгибе), анемона
-# Потом мелкие филлеры (отдельные листочки/цветочки) равномерно заполняют оставшиеся пустоты.
+# Узлы: nx столбцов × ny строк (оба чётные). Узел (r, j): если (r + j) чётно — заяц, иначе растение
+# (дуб, ягоды, бутон с птицей на изгибе, анемона). В каждой строке зайцы и растения чередуются,
+# так что ни горизонтальных, ни вертикальных полос нет, зайцы стоят по диагоналям.
+# Дальше в пустоты ставятся средние элементы (соцветия из 2–3 цветков и веточки из листьев),
+# потом мелкие филлеры (отдельные листочки/цветочки), всё равномерно, по самым большим дыркам.
 # Раппорт 29" = 4350 px @150 dpi, высота 5200 px.
 import argparse, math, os
 import numpy as np
@@ -28,9 +29,9 @@ ap = argparse.ArgumentParser()
 ap.add_argument('--shelf', required=True)
 ap.add_argument('--out', default='раппорт_сетка.jpg')
 ap.add_argument('--width', type=int, default=4350)
-ap.add_argument('--height', type=int, default=5200)
-ap.add_argument('--nx', type=int, default=4)            # зайцев в строке
-ap.add_argument('--ny', type=int, default=6)            # строк всего (чётное)
+ap.add_argument('--height', type=int, default=6000)
+ap.add_argument('--nx', type=int, default=4)            # узлов в строке (чётное)
+ap.add_argument('--ny', type=int, default=6)            # строк (чётное)
 ap.add_argument('--bg', default='ECE5D8')
 ap.add_argument('--scale', type=float, default=1.0)     # 0.25 = черновик
 ap.add_argument('--quality', type=int, default=95)
@@ -39,8 +40,9 @@ ap.add_argument('--land-dx', type=float, default=0.0)    # смещение ту
 ap.add_argument('--tilt', type=float, default=14)        # наклон бабочки по часовой стрелке, градусов
 ap.add_argument('--land-gap', type=float, default=0.0)   # поднять бабочку над точкой касания, доля её высоты
 ap.add_argument('--bud-dy', type=float, default=2.2)       # на сколько см опустить бутон с птицей
-ap.add_argument('--max-shift', type=float, default=3.0)   # макс. сдвиг соседа спящего зайца от бабочки, см
 ap.add_argument('--no-fillers', action='store_true')
+ap.add_argument('--mid-cm', type=float, default=5.0)       # размер средних элементов (соцветий и веточек), см
+ap.add_argument('--mid-count', type=int, default=24)
 ap.add_argument('--fill-cm', type=float, default=3.3)     # самая крупная деталь филлера, см (меньше бабочки)
 ap.add_argument('--fill-gap', type=float, default=0.9)    # просвет вокруг филлера, см
 ap.add_argument('--fill-max', type=int, default=1000)
@@ -49,7 +51,7 @@ ap.add_argument('--no-birds', action='store_true')         # птицы на и�
 ap.add_argument('--no-butterfly', action='store_true')  # бабочка на носу спящего зайца
 ap.add_argument('--check', action='store_true')
 a = ap.parse_args()
-assert a.ny % 2 == 0, '--ny должно быть чётным (иначе сетка не сойдётся на шве)'
+assert a.ny % 2 == 0 and a.nx % 2 == 0, '--nx и --ny должны быть чётными (иначе шахматка не сойдётся на шве)'
 
 S = a.scale
 W, H = int(a.width * S), int(a.height * S)
@@ -189,9 +191,9 @@ cache = {}
 sizes = []
 import random
 rnd = random.Random(a.seed)
-nrows = a.ny // 2
 BIRDS = sorted(os.path.splitext(f)[0] for f in os.listdir(a.shelf)
                if f.endswith('.png') and prefix_of(f) in ('малиновка', 'синица', 'воробей', 'птица'))
+birds_on = bool(BIRDS) and not a.no_birds
 
 
 def get(name):
@@ -201,87 +203,118 @@ def get(name):
     return cache[name]
 
 
-def A_name(i, jr):
-    return LAYERS['A'][(i + 2 * jr) % len(LAYERS['A'])]
-
-
-def B_name(i, jr):
-    return LAYERS['B'][((i % a.nx) + (jr % nrows)) % len(LAYERS['B'])]
-
-
-birds_on = bool(BIRDS) and not a.no_birds
-
-
 def bud(n):
     return n.startswith('бутон')
 
 
-# 1. зайцы: ориентации и сдвиги
-hares = {}
-for jr in range(nrows):
-    for i in range(a.nx):
-        name = A_name(i, jr)
-        get(name)
-        flip = (i + jr) % 2 == 1
-        if name == 'заяц_спит':                          # нос (с бабочкой) смотрит в сторону большего просвета
-            me = cache[name].width / 2
-            wl, wr = get(A_name((i - 1) % a.nx, jr)).width / 2, get(A_name((i + 1) % a.nx, jr)).width / 2
-            flip = (dx - me - wl) > (dx - me - wr)
-        if name == 'заяц_прыгает' and birds_on:        # исходно лапы слева: разворачиваем от бутонов с птицами
-            up = (jr - 1) % nrows
-            bl = sum(bud(B_name(i - 1, jb)) for jb in (up, jr))
-            br = sum(bud(B_name(i, jb)) for jb in (up, jr))
-            if bl != br:
-                flip = bl > br
-        hares[(i, jr)] = [name, flip, 0.0]
-if not a.no_butterfly:
-    get('бабочка_2')
-    over = 0.6 * cache['бабочка_2'].width                # на сколько бабочка выступает за кончик носа
-    for (i, jr), (name, flip, _) in list(hares.items()):
-        if name != 'заяц_спит':
-            continue
-        d = -1 if flip else 1                            # сторона носа
-        j, k = ((i + d) % a.nx, jr), ((i + 2 * d) % a.nx, jr)
-        w_s, w_n, w_m = cache[name].width, cache[hares[j][0]].width, cache[hares[k][0]].width
-        gap_s = dx - (w_s / 2 + over) - w_n / 2          # просвет от бабочки до соседа
-        gap_o = dx - w_n / 2 - w_m / 2                   # просвет соседа с другой стороны
-        hares[j][2] += d * max(0.0, min((gap_o - gap_s) / 2, a.max_shift * PX_CM * S))
+# ---------- узлы шахматки: (r + j) чётно → заяц, нечётно → растение ----------
+nodes = {(r, j): ((r + j) % 2 == 0) for r in range(a.ny) for j in range(a.nx)}
 
-for (i, jr), (name, flip, sh) in hares.items():
-    cx, cy = ox + i * dx + sh, oy + 2 * jr * dy
+
+def pos(r, j):
+    return ox + j * dx, oy + r * dy
+
+
+DIAG = ((1, 1), (1, -1), (-1, 1), (-1, -1))              # ближайшие по диагонали
+TIERS = [DIAG + ((2, 0), (-2, 0), (0, 2), (0, -2)),      # от строгого к мягкому: пробуем строгий, если не решается — мягче
+         DIAG + ((2, 0), (-2, 0)),
+         DIAG + ((0, 2), (0, -2)),
+         DIAG]
+
+
+def assign(kind_nodes, names, row_unique=(), col_unique=(), tiers=None):
+    """Раздаёт имена узлам так, чтобы соседи (диагональ, по вертикали через строку, в строке) не совпадали.
+    Строгость снижается, если иначе не решается. На каждом уровне — серия случайных попыток,
+    берётся решение с самым ровным числом каждого типа (разброс ≤ 1, если получается)."""
+    order = sorted(kind_nodes)
+    cap = -(-len(order) // len(names)) + 1                  # одного типа не больше (поровну + 1)
+    tiers = tiers or TIERS
+    for tier, offs in enumerate(tiers):
+        best = None
+        for attempt in range(80):
+            res = {}
+            order = sorted(kind_nodes)
+            rnd.shuffle(order)
+
+            def rec(k):
+                if k == len(order):
+                    return True
+                n = order[k]
+                used = {res[((n[0] + dr) % a.ny, (n[1] + dj) % a.nx)] for dr, dj in offs if abs(dr) == 1
+                        and ((n[0] + dr) % a.ny, (n[1] + dj) % a.nx) in res}          # диагональные соседи
+                used_far = {res[((n[0] + dr) % a.ny, (n[1] + dj) % a.nx)] for dr, dj in offs if abs(dr) != 1
+                            and ((n[0] + dr) % a.ny, (n[1] + dj) % a.nx) in res}      # через строку и в строке
+                cnt = {nm: sum(1 for v in res.values() if v == nm) for nm in names}
+                for nm in sorted(names, key=lambda x: (cnt[x], rnd.random())):
+                    if nm in row_unique and any(res.get((n[0], jj)) == nm for jj in range(a.nx)):
+                        continue                                    # такой элемент в строке не больше одного
+                    if nm not in used and (nm not in used_far or nm in row_unique) and cnt[nm] < cap:
+                        res[n] = nm
+                        if rec(k + 1):
+                            return True
+                        del res[n]
+                return False
+            if not rec(0):
+                break                                       # на этом уровне решения нет совсем
+            cs = [sum(1 for v in res.values() if v == nm) for nm in names]
+            spread = max(cs) - min(cs)
+            same_col = sum(1 for nm in col_unique for m1 in res for m2 in res    # пары одинаковых «редких» элементов в одной колонке
+                           if m1 < m2 and res[m1] == nm == res[m2] and m1[1] == m2[1])
+            score = (spread > 1, same_col, spread)
+            if best is None or score < best[0]:
+                best = (score, dict(res), cs)
+            if score == (False, 0, 0) or (attempt >= 60 and best[0][0] is False and best[0][1] == 0):
+                break
+        if best:
+            print(f'расстановка {names[0].split("_")[0]}…: строгость {tier + 1} из {len(tiers)}, по типам {best[2]}, одинаковых в колонке: {best[0][1]}')
+            return best[1]
+    raise AssertionError('не удалось расставить')
+
+
+TIERS_H = [TIERS[0], DIAG + ((0, 2), (0, -2)), DIAG + ((2, 0), (-2, 0)), DIAG]      # зайцам важнее не повторять позу в строке
+hare_at = assign([n for n, h in nodes.items() if h], LAYERS['A'], col_unique=tuple(LAYERS['A']), tiers=TIERS_H)
+plant_at = assign([n for n, h in nodes.items() if not h], LAYERS['B'], row_unique=('бутон_1',), col_unique=tuple(LAYERS['B']))
+for nm in set(hare_at.values()) | set(plant_at.values()):
+    get(nm)
+
+# 1. зайцы
+for (r, j), name in hare_at.items():
+    cx, cy = pos(r, j)
+    flip = ((r + j) // 2) % 2 == 1                        # повторы по строке и по вертикали зеркальны друг другу
+    nl, nr = plant_at[(r, (j - 1) % a.nx)], plant_at[(r, (j + 1) % a.nx)]
+    if name == 'заяц_спит':                               # нос (с бабочкой) смотрит в сторону большего просвета
+        flip = cache[nl].width < cache[nr].width
+    if name == 'заяц_прыгает' and birds_on and bud(nl) != bud(nr):
+        flip = bud(nl)                                    # задние лапы разворачиваем от бутона с птицей
     el = cache[name].transpose(Image.FLIP_LEFT_RIGHT) if flip else cache[name]
     paste(el, cx, cy)
-    if name == 'заяц_спит' and not a.no_butterfly:       # бабочка (в 3/4, смотрит к морде) на носу
-        # исходная бабочка смотрит вправо; голову всегда к морде; наклон по часовой стрелке (у зеркального зайца зеркально)
-        b, body = make_butterfly(cache['бабочка_2'], head_left=not flip, angle=(-a.tilt if not flip else a.tilt))
+    if name == 'заяц_спит' and not a.no_butterfly:        # бабочка (в 3/4, смотрит к морде) на носу
+        b, body = make_butterfly(get('бабочка_2'), head_left=not flip, angle=(-a.tilt if not flip else a.tilt))
         tx, ty = nose(el, flip)
         lx, ly = land(el, b, body, tx, -1 if flip else 1)
         paste(b, cx - el.width / 2 + lx + b.width / 2, cy - el.height / 2 + ly + b.height / 2)
 
-# 2. нечётные ряды: дуб, ягоды, бутон (с птицей), анемона
+# 2. растения: дуб, ягоды, бутон (с птицей), анемона
 bird_n = 0
-for jr in range(nrows):
-    for i in range(a.nx):
-        name = B_name(i, jr)
-        get(name)
-        cx, cy = ox + (i + 0.5) * dx, oy + (2 * jr + 1) * dy
-        el = cache[name].transpose(Image.FLIP_LEFT_RIGHT) if (i + jr) % 2 == 1 else cache[name]
-        if bud(name) and birds_on:                       # бутон ниже; птица садится на верхний изгиб, стебель закрывает лапки
-            cy += a.bud_dy * PX_CM * S
-            bn = BIRDS[bird_n % len(BIRDS)]
-            bird = get(bn)
-            bird = bird.transpose(Image.FLIP_LEFT_RIGHT) if bird_n % 4 in (1, 2) else bird
-            ax, ay, t = apex(el)
-            fx, fy = foot_anchor(bird)
-            bx = cx - el.width / 2 + ax - fx
-            by = cy - el.height / 2 + ay + 0.5 * t - fy
-            paste(bird, bx + bird.width / 2, by + bird.height / 2)
-            bird_n += 1
-        paste(el, cx, cy)
+for (r, j) in sorted(plant_at):
+    name = plant_at[(r, j)]
+    cx, cy = pos(r, j)
+    el = cache[name].transpose(Image.FLIP_LEFT_RIGHT) if ((r + j) // 2) % 2 else cache[name]
+    if bud(name) and birds_on:                            # птица садится на верхний изгиб, стебель закрывает лапки
+        cy += a.bud_dy * PX_CM * S
+        bird = get(BIRDS[bird_n % len(BIRDS)])
+        bird = bird.transpose(Image.FLIP_LEFT_RIGHT) if bird_n % 4 in (1, 2) else bird
+        ax, ay, t = apex(el)
+        fx, fy = foot_anchor(bird)
+        bx = cx - el.width / 2 + ax - fx
+        by = cy - el.height / 2 + ay + 0.5 * t - fy
+        paste(bird, bx + bird.width / 2, by + bird.height / 2)
+        bird_n += 1
+    paste(el, cx, cy)
 
 
-# 3. филлеры: листы режутся на отдельные детали, детали садятся в самые большие пустоты (по очереди, равномерно)
-def split_pieces(name):
+# ---------- филлеры и средние элементы ----------
+def split_pieces(name, longest_cm):
     im = Image.open(os.path.join(a.shelf, name + '.png')).convert('RGBA')
     arr = np.array(im)
     al = arr[..., 3] > 40
@@ -297,34 +330,108 @@ def split_pieces(name):
         pc[..., 3] = np.where(m, arr[..., 3], 0)
         out.append(Image.fromarray(pc).crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1)))
     big = max(max(p.size) for p in out)
-    k = a.fill_cm * PX_CM * S / big                      # самая крупная деталь листа = fill_cm, остальные пропорционально
+    k = longest_cm * PX_CM * S / big                      # самая крупная деталь листа = longest_cm, остальные пропорционально
     return [p.resize((max(1, int(p.width * k)), max(1, int(p.height * k))), Image.LANCZOS) for p in out]
 
 
-n_fill = 0
-if not a.no_fillers:
-    pool = [pc for sh in FILLER_SHEETS for pc in split_pieces(sh)]
-    print(f'деталей филлера: {len(pool)}, крупнейшая {max(max(p.size) for p in pool) / PX_CM / S:.1f} см')
-    DF = 10
-    MWc, MHc = -(-W // DF), -(-H // DF)
-    margin = a.fill_gap * PX_CM * S / DF
-    while n_fill < a.fill_max:
+def orient_up(pc):
+    """Деталь на стебельке/листик → головой вверх; возвращает (картинка, x, y основания). Основание — узкий конец."""
+    al = np.array(pc.getchannel('A')) > 40
+    ys, xs = np.nonzero(al)
+    pts = np.stack([xs, ys], 1).astype(float)
+    c = pts.mean(0)
+    wv, vv = np.linalg.eigh(np.cov((pts - c).T))
+    ax = vv[:, 1]
+    t, perp = (pts - c) @ ax, (pts - c) @ np.array([-ax[1], ax[0]])
+    lo, hi = t.min(), t.max()
+    w_lo = perp[t < lo + 0.15 * (hi - lo)].std() if (t < lo + 0.15 * (hi - lo)).sum() > 3 else 1e9
+    w_hi = perp[t > hi - 0.15 * (hi - lo)].std() if (t > hi - 0.15 * (hi - lo)).sum() > 3 else 1e9
+    head = ax if w_lo < w_hi else -ax                      # голова — на широком конце
+    cur = math.degrees(math.atan2(-head[1], head[0]))
+    up = pc.rotate(90 - cur, expand=True, resample=Image.BICUBIC)
+    ua = np.array(up.getchannel('A')) > 40
+    rows = np.nonzero(ua.any(axis=1))[0]
+    bx = int(np.nonzero(ua[max(0, rows[-1] - 3):rows[-1] + 1].any(axis=0))[0].mean())
+    return up, bx, int(rows[-1])
+
+
+def fan(pieces, angles):
+    """Веерок: детали сходятся основаниями в одной точке и расходятся под углами (градусы, против часовой)."""
+    ups = [orient_up(p) for p in pieces]
+    R = int(max(max(u.size) for u, _, _ in ups) * 1.6)
+    big = Image.new('RGBA', (2 * R, 2 * R), (0, 0, 0, 0))
+    for (u, bx, by), ang in zip(ups, angles):
+        layer = Image.new('RGBA', (2 * R, 2 * R), (0, 0, 0, 0))
+        layer.paste(u, (R - bx, R - by), u)
+        big = Image.alpha_composite(big, layer.rotate(ang, center=(R, R), resample=Image.BICUBIC))
+    return big.crop(big.getchannel('A').point(lambda v: 255 if v > 10 else 0).getbbox())
+
+
+DF = 10
+MWc, MHc = -(-W // DF), -(-H // DF)
+
+
+def fill_holes(make, count, margin_cm, label):
+    """make() → картинка (RGBA) или None; ставит по очереди в самые большие пустоты."""
+    n = 0
+    margin = margin_cm * PX_CM * S / DF
+    while n < count:
         occ = np.array(occ_alpha.resize((MWc, MHc), Image.BOX)) > 8
         dist = ndi.distance_transform_edt(~np.tile(occ, (3, 3)))[MHc:2 * MHc, MWc:2 * MWc]
         cyc, cxc = np.unravel_index(np.argmax(dist), dist.shape)
         best = dist[cyc, cxc]
+        pc = make(best, margin)
+        if pc is None:
+            break
+        paste(pc, cxc * DF + DF / 2, cyc * DF + DF / 2)
+        n += 1
+    print(f'{label}: {n}')
+    return n
+
+
+mid_n = 0
+if not a.no_fillers:
+    flowers = split_pieces('филлер_2', a.mid_cm * 0.8)     # цветочки на стебельках → соцветия
+    leaves = split_pieces('филлер_1', a.mid_cm * 0.8)      # листочки → веточки
+
+    def make_mid(best, margin):
+        for _ in range(12):
+            if mid_n % 2 == 0:                             # соцветие из 2–3 цветков, смотрит вверх с небольшим наклоном
+                k = rnd.choice((2, 3))
+                ps = rnd.sample(flowers, k)
+                angs = {2: (-14, 14), 3: (-26, 0, 26)}[k]
+                pc = fan(ps, angs).rotate(rnd.uniform(-35, 35), resample=Image.BICUBIC, expand=True)
+            else:                                          # листовая веточка из 3–4 листьев, любой ориентации
+                k = rnd.choice((3, 4))
+                ps = rnd.sample(leaves, k)
+                angs = {3: (-30, 0, 30), 4: (-40, -14, 14, 40)}[k]
+                pc = fan(ps, angs).rotate(rnd.uniform(0, 360), resample=Image.BICUBIC, expand=True)
+            if 0.5 * math.hypot(*pc.size) / DF + margin <= best:
+                return pc
+        return None
+
+    def make_mid_counted(best, margin):
+        global mid_n
+        pc = make_mid(best, margin)
+        if pc is not None:
+            mid_n += 1
+        return pc
+    fill_holes(make_mid_counted, a.mid_count, a.fill_gap * 1.2, 'средних элементов')
+
+    pool = split_pieces('филлер_1', a.fill_cm) + split_pieces('филлер_2', a.fill_cm)
+    print(f'деталей филлера: {len(pool)}, крупнейшая {max(max(p.size) for p in pool) / PX_CM / S:.1f} см')
+
+    def make_fill(best, margin):
         cand = [p for p in pool if 0.5 * math.hypot(*p.size) / DF + margin <= best]
         if not cand:
-            break
-        pc = rnd.choice(cand).rotate(rnd.uniform(0, 360), resample=Image.BICUBIC, expand=True)
-        paste(pc, cxc * DF + DF / 2, cyc * DF + DF / 2)
-        n_fill += 1
-print('филлеров поставлено:', n_fill)
+            return None
+        return rnd.choice(cand).rotate(rnd.uniform(0, 360), resample=Image.BICUBIC, expand=True)
+    fill_holes(make_fill, a.fill_max, a.fill_gap, 'филлеров')
 
 print('размеры на ткани (см):')
 for n, (w, h), k in sizes:
     print(f'  {n:18s} {w / PX_CM / S:5.1f} × {h / PX_CM / S:5.1f}   (исходник ×{k / S:.2f})')
-print(f'шаг сетки: {dx / PX_CM / S:.1f} см по горизонтали, {dy / PX_CM / S:.1f} см по вертикали')
+print(f'шаг узлов: {dx / PX_CM / S:.1f} см по строке, {dy / PX_CM / S:.1f} см между строками; раппорт {a.width}×{a.height}')
 canvas.save(a.out, quality=a.quality, subsampling=0, optimize=True)
 print('готово', a.out, canvas.size)
 if a.check:
