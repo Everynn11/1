@@ -19,16 +19,20 @@ ap.add_argument('--flip-b', action='store_true')         # зеркалить л
 a = ap.parse_args()
 
 R = a.size
-rib = Image.open(a.ribbon).convert('RGBA')
-Wr, Hr = rib.size
+rib0 = Image.open(a.ribbon).convert('RGBA')
+Wr, Hr = rib0.size
+NREP = 4
+rib = Image.new('RGBA', (Wr * NREP, Hr), (0, 0, 0, 0))
+for i_ in range(NREP):
+    rib.alpha_composite(rib0, (i_ * Wr, 0))
 n = 2                                                    # периодов на сторону плитки
 T = R / n * math.sqrt(2)                                 # длина периода вдоль диагонали
 k = T / Wr * a.scale
-rib = rib.resize((int(round(Wr * k)), int(round(Hr * k))), Image.LANCZOS)
-print(f'лента {Wr}×{Hr} → {rib.size} (масштаб {k:.3f}), период по оси {T:.0f} px')
+rib = rib.resize((int(round(Wr * NREP * k)), int(round(Hr * k))), Image.LANCZOS)
+print(f'лента {Wr}×{Hr} ×{NREP} периода → {rib.size} (масштаб {k:.3f}), период по оси {T:.0f} px')
 
 # цвет лозы (по краю ленты)
-arr = np.array(rib)
+arr = np.array(rib0)
 col = arr[:, 0][arr[:, 0, 3] > 200][:, :3].mean(axis=0)
 print('цвет лозы', col.astype(int))
 
@@ -66,9 +70,8 @@ def axis_points(ax, m):
 layers = {+1: Image.new('RGBA', (R, R), (0, 0, 0, 0)), -1: Image.new('RGBA', (R, R), (0, 0, 0, 0))}
 for ax in AXES:
     L = layers[ax['dir']]
-    for m in range(n):
-        cx, cy = axis_points(ax, m)
-        paste_wrap(L, rot[ax['dir']], cx, cy)
+    cx, cy = axis_points(ax, (n - 1) / 2)             # центр оси (полоса длиннее оси, лишние периоды ложатся на те же места)
+    paste_wrap(L, rot[ax['dir']], cx, cy)
 
 # узлы пересечений осей
 nodes = []
