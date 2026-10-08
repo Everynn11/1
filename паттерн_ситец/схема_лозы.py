@@ -12,6 +12,7 @@ ap.add_argument('--seed', type=int, default=3)
 ap.add_argument('--amp', type=float, default=0.05)      # амплитуда волны лозы, доля размера
 ap.add_argument('--waves', type=int, default=2)         # волн на период
 ap.add_argument('--flowers', type=int, default=6)       # цветов на одну лозу
+ap.add_argument('--stems-only', action='store_true')    # только лозы: без цветов, листьев и побегов
 ap.add_argument('--gap', type=float, default=0.012)     # зазор между метками, доля размера
 a = ap.parse_args()
 
@@ -74,6 +75,22 @@ def poly(points, fill, width=0, outline=None, close=True):
             dr.polygon(sp, fill=fill, outline=outline)
         else:
             dr.line(sp, fill=fill, width=width, joint='curve')
+
+
+def stroke(points, width, fill):
+    """Гладкая линия: круги диаметром width вдоль ломаной (частый шаг), на торе."""
+    pts = np.array(points, float)
+    dense = [pts[0]]
+    for p0, p1 in zip(pts[:-1], pts[1:]):
+        n = max(1, int(np.hypot(*(p1 - p0)) / 0.6))
+        for k in range(1, n + 1):
+            dense.append(p0 + (p1 - p0) * k / n)
+    r = width / 2
+    for dx, dy in tor_shifts():
+        for x, y in dense:
+            X, Y = x * SS + dx, y * SS + dy
+            if -r * SS <= X <= W + r * SS and -r * SS <= Y <= W + r * SS:
+                dr.ellipse([X - r * SS, Y - r * SS, X + r * SS, Y + r * SS], fill=fill)
 
 
 def circle(cx, cy, r, fill):
@@ -172,6 +189,9 @@ for vi, v in enumerate(VINES):
         s += step * rng.uniform(0.8, 1.4)
         side = -side
 
+if a.stems_only:
+    flowers, leaves = [], []
+
 # листья (под лозой и цветами)
 for lf in leaves:
     poly(ellipse_poly(lf['x'], lf['y'], lf['rl'], lf['rw'], lf['ang'], pointy=True), LEAF_DARK if lf['dark'] else LEAF_LIGHT)
@@ -187,10 +207,11 @@ for v in VINES:
     pts = v['pts']
     seg = [(x, y) for x, y in pts]
     # разрыв на границе тора: рисуем по отрезкам
-    for i in range(len(pts)):
-        p0, p1 = pts[i], pts[(i + 1) % len(pts)]
-        d = (p1 - p0 + R / 2) % R - R / 2
-        poly([tuple(p0), tuple(p0 + d)], VINE_COL, width=int(THICK * SS), close=False)
+    path = [np.array(pts[0])]
+    for i in range(1, len(pts) + 1):
+        d = (pts[i % len(pts)] - path[-1] + R / 2) % R - R / 2
+        path.append(path[-1] + d)
+    stroke(path, THICK, VINE_COL)
 
 # узлы пересечений: находим и поднимаем одну лозу над другой с белым ореолом
 nodes = []
@@ -217,14 +238,17 @@ for k, (i, j, x, y, ia, ib) in enumerate(nodes):
     top = i if k % 2 == 0 else j                      # чередуем, кто сверху
     v = VINES[top]
     idx0 = ia if top == i else ib
-    span = int(0.045 * R / (R / len(v['pts'])))
-    pts = [v['pts'][(idx0 + o) % len(v['pts'])] for o in range(-span, span + 1)]
-    path = [tuple(pts[0])]
-    for p_ in pts[1:]:
-        d = (p_ - np.array(path[-1]) + R / 2) % R - R / 2
-        path.append(tuple(np.array(path[-1]) + d))
-    poly(path, (255, 255, 255), width=int(THICK * 1.9 * SS), close=False)      # белый ореол
-    poly(path, VINE_COL, width=int(THICK * SS), close=False)
+    step_px = R / len(v['pts'])
+
+    def part(sp):
+        span = int(sp * R / step_px)
+        pts = [v['pts'][(idx0 + o) % len(v['pts'])] for o in range(-span, span + 1)]
+        path = [np.array(pts[0])]
+        for p_ in pts[1:]:
+            path.append(path[-1] + ((p_ - path[-1] + R / 2) % R - R / 2))
+        return path
+    stroke(part(0.024), THICK * 1.9, (255, 255, 255))       # белый ореол (короткий)
+    stroke(part(0.070), THICK, VINE_COL)                    # верхняя лоза (длиннее ореола: без щербин)
 
 # цветы поверх
 for fx in flowers:
