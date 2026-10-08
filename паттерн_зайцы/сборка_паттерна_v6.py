@@ -15,7 +15,7 @@ PX_CM = 150 / 2.54
 
 # калибр элемента на ткани, см (правьте здесь)
 CM = {'заяц': 9.5, 'малиновка': 6.5, 'бабочка': 4.5, 'анемона': 7.0, 'бутон': 6.0,
-      'папоротник': 10.0, 'эвкалипт': 9.0, 'ягоды': 9.0, 'дуб': 10.0, 'колос': 7.5, 'филлер': 6.0}
+      'папоротник': 10.0, 'эвкалипт': 9.0, 'ягоды': 9.0, 'дуб': 10.0, 'колос': 6.0, 'филлер': 6.0}
 
 # (метка, префиксы, аргумент-количество, отступ между элементами, см)
 GROUPS = [('ветки',   ('папоротник', 'эвкалипт', 'ягоды', 'дуб'), 'branches',    2.0),
@@ -35,13 +35,13 @@ ap.add_argument('--height', type=int, default=5200)
 ap.add_argument('--scale', type=float, default=1.0)  # 0.25 = черновик
 ap.add_argument('--bg', default='ECE5D8')            # Linen
 ap.add_argument('--quality', type=int, default=95)
-ap.add_argument('--hares', type=int, default=10)
-ap.add_argument('--branches', type=int, default=12)
+ap.add_argument('--hares', type=int, default=11)
+ap.add_argument('--branches', type=int, default=14)
 ap.add_argument('--flowers', type=int, default=16)
 ap.add_argument('--birds', type=int, default=4)
 ap.add_argument('--butterflies', type=int, default=7)
-ap.add_argument('--spikes', type=int, default=8)
-ap.add_argument('--fillers', type=int, default=16)
+ap.add_argument('--spikes', type=int, default=5)
+ap.add_argument('--fillers', type=int, default=12)
 ap.add_argument('--perch', type=int, default=3)      # сколько бабочек сажать на колос/цветок
 ap.add_argument('--hare-gap', type=float, default=0.35)  # мин. расстояние между одинаковыми позами, доля ширины
 ap.add_argument('--check', action='store_true')      # сохранить плитку 2×2 для проверки швов
@@ -84,7 +84,7 @@ D = 10                                  # масштаб маски занято
 MW, MH = -(-W // D), -(-H // D)
 occ = np.zeros((MH, MW), bool)
 hare_log = []                           # (поза, cx, cy)
-anchors = []                            # (x, y) кончиков колосьев и цветков, куда садятся бабочки
+anchors = []                            # (x, y, ys, xs, x0, y0): кончик колоса/цветка и клетки занятости хозяина
 warn_up = {}                            # имя -> во сколько раз растянут исходник
 
 
@@ -168,12 +168,21 @@ for lab, prefixes, arg, margin_cm in GROUPS:
             order = list(range(len(group))); rnd.shuffle(order)
         name, img, cm = group[order.pop()]
         if lab == 'бабочки' and i < min(a.perch, len(anchors)):
-            ax, ay = anchors[rnd.randrange(len(anchors))]   # садится на кончик колоса или цветок
-            el = prep(img, name, cm, 0.9)
-            x = ax + rnd.choice((-1, 1)) * int(0.25 * el.width) - el.width // 2
-            y = ay - el.height // 2
-            mark(el, x, y, margin_px); paste(el, x, y); placed[lab] += 1
-            continue
+            done = False
+            for _ in range(30):             # ищем кончик, где рядом никого нет, кроме самого хозяина
+                ax, ay, hys, hxs, hx0, hy0 = anchors[rnd.randrange(len(anchors))]
+                el = prep(img, name, cm, 0.9)
+                x = ax + rnd.choice((-1, 1)) * int(0.25 * el.width) - el.width // 2
+                y = ay - el.height // 2
+                bys, bxs = mask_idx(el, margin_px)
+                tmp = occ.copy()
+                tmp[(hys + hy0) % MH, (hxs + hx0) % MW] = False
+                if not tmp[(bys + y // D) % MH, (bxs + x // D) % MW].any():
+                    occ[(bys + y // D) % MH, (bxs + x // D) % MW] = True
+                    paste(el, x, y); placed[lab] += 1; done = True
+                    break
+            if done:
+                continue
         el = prep(img, name, cm)
         pos = place_free(el, margin_px, pose=name if lab == 'зайцы' else None)
         if pos:
@@ -181,7 +190,8 @@ for lab, prefixes, arg, margin_cm in GROUPS:
             paste(el, x, y); placed[lab] += 1
             if prefix_of(name) in ('колос', 'анемона'):
                 tx, ty = top_anchor(el)
-                anchors.append((x + tx, y + ty))
+                hys, hxs = mask_idx(el, margin_px)
+                anchors.append((x + tx, y + ty, hys, hxs, x // D, y // D))
 
 print({k: f'{v} из {getattr(a, next(g[2] for g in GROUPS if g[0] == k))}' for k, v in placed.items()})
 if warn_up:
