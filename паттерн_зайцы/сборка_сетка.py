@@ -41,7 +41,7 @@ ap.add_argument('--land-gap', type=float, default=0.0)   # поднять баб
 ap.add_argument('--bud-dy', type=float, default=2.2)       # на сколько см опустить бутон с птицей
 ap.add_argument('--max-shift', type=float, default=3.0)   # макс. сдвиг соседа спящего зайца от бабочки, см
 ap.add_argument('--no-fillers', action='store_true')
-ap.add_argument('--fill-cm', type=float, default=2.2)     # самая крупная деталь филлера, см (меньше бабочки)
+ap.add_argument('--fill-cm', type=float, default=3.3)     # самая крупная деталь филлера, см (меньше бабочки)
 ap.add_argument('--fill-gap', type=float, default=0.9)    # просвет вокруг филлера, см
 ap.add_argument('--fill-max', type=int, default=1000)
 ap.add_argument('--seed', type=int, default=1)
