@@ -25,21 +25,40 @@ T = R / n * math.sqrt(2)                                  # период вдо�
 ph = [float(x) for x in a.phases.split(',')]
 
 
-def load_ribbon(path):
-    im = Image.open(path).convert('RGBA')
-    W0, H0 = im.size
+def vine_only(im):
+    """Только стебель ленты: связная область цвета стебля от точки на левом краю (без листьев и цветов)."""
     arr = np.array(im)
-    vine = arr[:, 0][arr[:, 0, 3] > 200][:, :3].mean(axis=0)
+    ys = np.where(arr[:, 0, 3] > 200)[0]
+    groups = np.split(ys, np.where(np.diff(ys) > 3)[0] + 1)
+    g = groups[-1]                                         # нижняя группа на краю: стебель (выше может быть лист)
+    sy = int(g.mean())
+    seed_col = arr[sy - 2:sy + 3, 0:3, :3].reshape(-1, 3).mean(axis=0)
+    d = np.abs(arr[..., :3].astype(int) - seed_col[None, None, :]).max(axis=2)
+    cand = (d < 26) & (arr[..., 3] > 200)
+    lab, _ = ndi.label(cand, structure=np.ones((3, 3)))
+    m = lab == lab[sy, 1]
+    m = ndi.binary_dilation(m, iterations=3) & (arr[..., 3] > 40)          # захватить тёмную обводку стебля
+    out = arr.copy(); out[..., 3] = np.where(m, arr[..., 3], 0)
+    return Image.fromarray(out), seed_col
+
+
+def make_strip(im):
+    W0, H0 = im.size
     strip = Image.new('RGBA', (W0 * a.nrep, H0), (0, 0, 0, 0))
     for i in range(a.nrep):
         strip.alpha_composite(im, (i * W0, 0))
     k = T / W0
-    strip = strip.resize((int(round(W0 * a.nrep * k)), int(round(H0 * k))), Image.LANCZOS)
-    return strip, vine
+    return strip.resize((int(round(W0 * a.nrep * k)), int(round(H0 * k))), Image.LANCZOS)
+
+
+def load_ribbon(path):
+    im = Image.open(path).convert('RGBA')
+    vo, vine = vine_only(im)
+    return make_strip(im), make_strip(vo), vine
 
 
 rib = {1: load_ribbon(a.r1), 2: load_ribbon(a.r2)}
-print('ленты:', {k: (v[0].size, v[1].astype(int)) for k, v in rib.items()})
+print('ленты:', {k: (v[0].size, v[2].astype(int)) for k, v in rib.items()})
 
 # четыре оси: направление (+1 «\» вниз-вправо; -1 «/» вверх-вправо), смещение c, лента, зеркало по вертикали
 AXES = [dict(dir=+1, c=0.00 * R, r=1, flip=False),
@@ -64,23 +83,27 @@ def paste_wrap(dst, im, cx, cy):
 
 axis_layers = []
 for i, ax in enumerate(AXES):
-    strip, vine = rib[ax['r']]
-    s = strip.transpose(Image.FLIP_TOP_BOTTOM) if ax['flip'] else strip
+    strip, vstrip, vine = rib[ax['r']]
     ang = -45 if ax['dir'] > 0 else 45
-    rs = s.rotate(ang, resample=Image.BICUBIC, expand=True)
+    def prep(st):
+        st = st.transpose(Image.FLIP_TOP_BOTTOM) if ax['flip'] else st
+        return st.rotate(ang, resample=Image.BICUBIC, expand=True)
+    rs, rv = prep(strip), prep(vstrip)
     # центр полосы на оси: середина n периодов, сдвинутая по фазе
     u = (n / 2 + ph[i]) * T
     d = np.array([1.0, ax['dir']]) / math.sqrt(2)
     p = (np.array([0.0, ax['c']]) + d * u) % R
     L = Image.new('RGBA', (R, R), (0, 0, 0, 0))
     paste_wrap(L, rs, p[0], p[1])
-    axis_layers.append((ax, L, vine))
+    LV = Image.new('RGBA', (R, R), (0, 0, 0, 0))
+    paste_wrap(LV, rv, p[0], p[1])
+    axis_layers.append((ax, L, LV))
 
 canvas = Image.new('RGBA', (R, R), (0, 0, 0, 0))
-for ax, L, vine in axis_layers:
+for ax, L, LV in axis_layers:
     if ax['dir'] > 0:
         canvas.alpha_composite(L)
-for ax, L, vine in axis_layers:
+for ax, L, LV in axis_layers:
     if ax['dir'] < 0:
         canvas.alpha_composite(L)
 
@@ -104,17 +127,15 @@ for i, (x, y) in enumerate(nodes):
     if i % 2:
         continue                                          # в чётных узлах «\» поверх, в нечётных остаётся «/» поверх
     dx = np.minimum(np.abs(xx - x), R - np.abs(xx - x)); dy = np.minimum(np.abs(yy - y), R - np.abs(yy - y))
-    near = np.hypot(dx, dy) < a.cut
-    for ax, L, vine in axis_layers:
+    dist_ = np.hypot(dx, dy)
+    soft = np.clip((a.cut - dist_) / 14.0, 0, 1)             # мягкий край круга: нет рваной границы
+    for ax, L, LV in axis_layers:
         if ax['dir'] < 0:
             continue
-        arr = np.array(L)
-        d_ = np.abs(arr[..., :3].astype(int) - vine[None, None, :]).max(axis=2)
-        m = (d_ < a.tol) & (arr[..., 3] > 200) & near
-        if m.sum() == 0:
+        patch = np.array(LV)
+        patch[..., 3] = (patch[..., 3] * soft).astype(np.uint8)
+        if patch[..., 3].max() == 0:
             continue
-        m = ndi.binary_dilation(m, iterations=2) & (arr[..., 3] > 40) & near
-        patch = arr.copy(); patch[..., 3] = np.where(m, patch[..., 3], 0)
         canvas.alpha_composite(Image.fromarray(patch))
 
 bgc = tuple(int(a.bg[i:i + 2], 16) for i in (0, 2, 4)) + (255,) if a.bg else (255, 255, 255, 255)
