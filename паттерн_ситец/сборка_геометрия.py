@@ -20,10 +20,10 @@ a = ap.parse_args()
 R = a.size
 # линия: (p, q) — сколько сторон плитки проходит лоза по x и y за петлю; c — смещение (доля R); для вертикали x0
 LINES = [
-    dict(p=1, q=1, c=0.00, rib='плющ_1', flip=False, ph=0.00),
-    dict(p=1, q=-1, c=0.40, rib='плющ_2', flip=False, ph=0.31),
-    dict(p=1, q=2, c=0.15, rib='плющ_3', flip=True, ph=0.57),
-    dict(p=2, q=1, c=0.62, rib='плющ_4', flip=False, ph=0.12),
+    dict(p=1, q=1, c=0.00, rib='плющ_крупный', flip=False, ph=0.00),
+    dict(p=1, q=-1, c=0.40, rib='лента_пионы', flip=False, ph=0.31),
+    dict(p=1, q=2, c=0.15, rib='плющ_мелкий', flip=True, ph=0.57),
+    dict(p=2, q=1, c=0.62, rib='плющ_веточки', flip=False, ph=0.12),
     dict(p=0, q=1, c=0.00, x0=0.55, rib='плющ_1', flip=True, ph=0.44),
 ]
 
