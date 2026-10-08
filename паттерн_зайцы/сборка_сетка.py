@@ -39,7 +39,8 @@ ap.add_argument('--quality', type=int, default=95)
 ap.add_argument('--size', type=float, default=1.07)     # общий множитель размеров элементов (шаг сетки не меняется)
 ap.add_argument('--trellis', default='')                # цвет решётки (HEX), напр. D9CFBA; пусто = без решётки
 ap.add_argument('--trellis-w', type=float, default=1.8)  # толщина линий решётки, мм
-ap.add_argument('--land-dx', type=float, default=0.22)   # смещение бабочки от кончика носа, доля её ширины
+ap.add_argument('--land-dx', type=float, default=0.0)    # смещение туловища бабочки от кончика носа (+ от морды), доля её ширины
+ap.add_argument('--tilt', type=float, default=14)        # наклон бабочки по часовой стрелке, градусов
 ap.add_argument('--land-gap', type=float, default=0.0)   # поднять бабочку над точкой касания, доля её высоты
 ap.add_argument('--no-butterfly', action='store_true')  # бабочка на носу спящего зайца
 ap.add_argument('--check', action='store_true')
@@ -88,20 +89,40 @@ def nose(el, flipped):
     return int(tip), int(ys.min())
 
 
-def land(el, b, tip_x, side):
-    """Опускает бабочку b на нос зайца el до первого касания пикселями («едва касаясь»).
-    tip_x — x кончика носа в координатах el; side=+1 бабочка смещена от кончика носа к краю (нос справа), -1 слева.
-    Возвращает левый верхний угол бабочки в координатах el."""
+# туловище бабочки (грудь и брюшко) в исходной ориентации (голова справа), доли габарита
+BODY = [(0.68, 0.63), (0.60, 0.74), (0.52, 0.90)]
+
+
+def make_butterfly(base, head_left, angle):
+    """Бабочка с маской туловища; поворот угол > 0 против часовой стрелки (PIL)."""
+    w, h = base.size
+    m = Image.new('L', base.size, 0)
+    d = ImageDraw.Draw(m)
+    pts = [(x * w, y * h) for x, y in BODY]
+    d.line(pts, fill=255, width=int(0.08 * w))
+    for px, py in pts:
+        r = 0.04 * w
+        d.ellipse([px - r, py - r, px + r, py + r], fill=255)
+    b = base
+    if head_left:
+        b, m = b.transpose(Image.FLIP_LEFT_RIGHT), m.transpose(Image.FLIP_LEFT_RIGHT)
+    b = b.rotate(angle, resample=Image.BICUBIC, expand=True)
+    m = m.rotate(angle, resample=Image.BILINEAR, expand=True)
+    return b, np.array(m) > 128
+
+
+def land(el, b, body, tip_x, side):
+    """Опускает бабочку на нос зайца до первого касания ТУЛОВИЩЕМ («прислонить, едва касаясь»).
+    Туловище по x стоит у кончика носа tip_x; side=+1 нос справа, -1 слева. Возвращает левый верхний угол b."""
     ea = np.array(el.getchannel('A')) > 40
-    ba = np.array(b.getchannel('A')) > 40
-    bx = int(tip_x + side * a.land_dx * b.width - b.width / 2)
+    cxm = np.nonzero(body)[1].mean()
+    bx = int(tip_x + side * a.land_dx * b.width - cxm)
     y = -b.height - 5
     while y < el.height:
         x0, x1 = max(bx, 0), min(bx + b.width, el.width)
         y0, y1 = max(y, 0), min(y + b.height, el.height)
-        if x1 > x0 and y1 > y0:
-            if (ea[y0:y1, x0:x1] & ba[y0 - y:y1 - y, x0 - bx:x1 - bx]).any():
-                return bx, y - int(a.land_gap * b.height)   # чуть приподнимаем: касание, не врезание
+        if x1 > x0 and y1 > y0 and (ea[y0:y1, x0:x1] & body[y0 - y:y1 - y, x0 - bx:x1 - bx]).any():
+            return bx, y
         y += 1
     return bx, y
 
@@ -147,11 +168,10 @@ for layer in a.layers.split(','):
             if name == 'заяц_спит' and not a.no_butterfly:     # бабочка (в 3/4, смотрит к морде) на носу
                 if 'бабочка_2' not in cache:
                     cache['бабочка_2'], _ = load('бабочка_2', CM['бабочка'])
-                b = cache['бабочка_2']
-                if not flip:
-                    b = b.transpose(Image.FLIP_LEFT_RIGHT)    # исходная смотрит вправо, нос справа: зеркалим к морде
+                # исходная бабочка смотрит вправо; голову всегда к морде; наклон по часовой стрелке (у зеркального зайца зеркально)
+                b, body = make_butterfly(cache['бабочка_2'], head_left=not flip, angle=(-a.tilt if not flip else a.tilt))
                 tx, ty = nose(el, flip)
-                lx, ly = land(el, b, tx, -1 if flip else 1)
+                lx, ly = land(el, b, body, tx, -1 if flip else 1)
                 paste(b, cx - el.width / 2 + lx + b.width / 2, cy - el.height / 2 + ly + b.height / 2)
 
 print('размеры на ткани (см):')
