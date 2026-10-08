@@ -2,10 +2,9 @@
 # Никакой случайности: у каждого элемента свой фиксированный размер, позы зайцев идут по схеме.
 #
 # Узлы сетки (nx столбцов, ny строк, ny чётное; строки чередуются со сдвигом на полшага):
-#   A — чётные строки, без сдвига       → зайцы
-#   B — нечётные строки, сдвиг на ½     → цветы
-#   C — чётные строки, сдвиг на ½       → (занято зайцами, места нет)
-#   D — нечётные строки, без сдвига     → ветки между цветами (--layers A,B,D)
+#   A — чётные строки, без сдвига       → зайцы (позы по схеме, бабочка на носу спящего)
+#   B — нечётные строки, сдвиг на ½     → дуб, ягоды, бутон (с птицей на изгибе), анемона
+# Потом мелкие филлеры (отдельные листочки/цветочки) равномерно заполняют оставшиеся пустоты.
 # Раппорт 29" = 4350 px @150 dpi, высота 5200 px.
 import argparse, math, os
 import numpy as np
@@ -21,10 +20,9 @@ CM = {'заяц': 9.0, 'бабочка': 2.67, 'малиновка': 3.9, 'си�
 
 LAYERS = {
     'A': ['заяц_база', 'заяц_нюхает', 'заяц_прыгает', 'заяц_спит', 'заяц_столбиком'],
-    'B': ['анемона_1', 'анемона_2', 'бутон_1'],
-    'C': [],      # между зайцами в их рядах: места нет (зазор 2–7 см), слой не используется
-    'D': ['папоротник_1', 'ягоды_1', 'эвкалипт_1', 'папоротник_2', 'дуб_1'],   # между цветами в нечётных рядах
+    'B': ['дуб_1', 'ягоды_1', 'бутон_1', 'анемона_2'],   # чередование в нечётных рядах; бутон в ряду ровно один → одна птица на ряд
 }
+FILLER_SHEETS = ['филлер_1', 'филлер_2']                  # листы режутся на отдельные листочки и цветочки
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--shelf', required=True)
@@ -33,17 +31,20 @@ ap.add_argument('--width', type=int, default=4350)
 ap.add_argument('--height', type=int, default=5200)
 ap.add_argument('--nx', type=int, default=4)            # зайцев в строке
 ap.add_argument('--ny', type=int, default=6)            # строк всего (чётное)
-ap.add_argument('--layers', default='A,B')
 ap.add_argument('--bg', default='ECE5D8')
 ap.add_argument('--scale', type=float, default=1.0)     # 0.25 = черновик
 ap.add_argument('--quality', type=int, default=95)
 ap.add_argument('--size', type=float, default=1.07)     # общий множитель размеров элементов (шаг сетки не меняется)
-ap.add_argument('--trellis', default='')                # цвет решётки (HEX), напр. D9CFBA; пусто = без решётки
-ap.add_argument('--trellis-w', type=float, default=1.8)  # толщина линий решётки, мм
 ap.add_argument('--land-dx', type=float, default=0.0)    # смещение туловища бабочки от кончика носа (+ от морды), доля её ширины
 ap.add_argument('--tilt', type=float, default=14)        # наклон бабочки по часовой стрелке, градусов
 ap.add_argument('--land-gap', type=float, default=0.0)   # поднять бабочку над точкой касания, доля её высоты
 ap.add_argument('--bud-dy', type=float, default=2.2)       # на сколько см опустить бутон с птицей
+ap.add_argument('--max-shift', type=float, default=3.0)   # макс. сдвиг соседа спящего зайца от бабочки, см
+ap.add_argument('--no-fillers', action='store_true')
+ap.add_argument('--fill-cm', type=float, default=2.2)     # самая крупная деталь филлера, см (меньше бабочки)
+ap.add_argument('--fill-gap', type=float, default=0.9)    # просвет вокруг филлера, см
+ap.add_argument('--fill-max', type=int, default=1000)
+ap.add_argument('--seed', type=int, default=1)
 ap.add_argument('--no-birds', action='store_true')         # птицы на изгибе бутонов
 ap.add_argument('--no-butterfly', action='store_true')  # бабочка на носу спящего зайца
 ap.add_argument('--check', action='store_true')
@@ -53,6 +54,7 @@ assert a.ny % 2 == 0, '--ny должно быть чётным (иначе се�
 S = a.scale
 W, H = int(a.width * S), int(a.height * S)
 canvas = Image.new('RGB', (W, H), tuple(int(a.bg[i:i+2], 16) for i in (0, 2, 4)))
+occ_alpha = Image.new('L', (W, H), 0)                    # где уже что-то нарисовано (для филлеров)
 dx, dy = W / a.nx, H / a.ny
 ox, oy = 0.5 * dx, 0.5 * dy                              # сетка сдвинута, чтобы зайцы не лежали на шве
 
@@ -73,11 +75,13 @@ def load(name, cm):
 def paste(el, cx, cy):
     x, y = int(cx - el.width / 2), int(cy - el.height / 2)
     rgb, al = el.convert('RGB'), el.getchannel('A')
+    hard = al.point(lambda v: 255 if v > 40 else 0)
     for ddx in (-W, 0, W):                               # вылезшее за край возвращается с другой стороны
         for ddy in (-H, 0, H):
             xx, yy = x + ddx, y + ddy
             if xx < W and yy < H and xx + el.width > 0 and yy + el.height > 0:
                 canvas.paste(rgb, (xx, yy), al)
+                occ_alpha.paste(255, (xx, yy, xx + el.width, yy + el.height), hard)
 
 
 def nose(el, flipped):
@@ -181,75 +185,141 @@ def land(el, b, body, tip_x, side):
     return bx, y
 
 
-if a.trellis:                                            # ромбическая решётка сквозь узлы A и B, под элементами
-    dr = ImageDraw.Draw(canvas)
-    col = tuple(int(a.trellis[i:i+2], 16) for i in (0, 2, 4))
-    lw = max(1, round(a.trellis_w / 10 * PX_CM * S))
-    L = W + H
-    for i in range(-a.nx, 2 * a.nx):
-        for jr in range(-a.ny, 2 * a.ny):
-            x0, y0 = ox + i * dx, oy + 2 * jr * dy
-            for sgn in (1, -1):
-                ux, uy = sgn * dx / 2, dy
-                n = math.hypot(ux, uy)
-                dr.line([(x0 - ux / n * L, y0 - uy / n * L), (x0 + ux / n * L, y0 + uy / n * L)], fill=col, width=lw)
-
 cache = {}
 sizes = []
-bird_n = 0
+import random
+rnd = random.Random(a.seed)
+nrows = a.ny // 2
 BIRDS = sorted(os.path.splitext(f)[0] for f in os.listdir(a.shelf)
                if f.endswith('.png') and prefix_of(f) in ('малиновка', 'синица', 'воробей', 'птица'))
-for layer in a.layers.split(','):
-    names = LAYERS[layer]
-    for jr in range(a.ny // 2):
-        for i in range(a.nx):
-            name = names[(i + 2 * jr) % len(names)] if layer == 'A' else names[(i + jr) % len(names)]
-            if name not in cache:
-                cache[name], k = load(name, CM[prefix_of(name)])
-                sizes.append((name, cache[name].size, k))
-            cx = ox + i * dx + (0.5 * dx if layer in 'BC' else 0)
-            cy = oy + (2 * jr + (1 if layer in 'BD' else 0)) * dy
-            flip = (i + jr) % 2 == 1
-            if name == 'заяц_спит' and layer == 'A':           # нос (с бабочкой) смотрит в сторону большего просвета
-                half = {}
-                for side, di in (('l', -1), ('r', 1)):
-                    nb = names[((i + di) % a.nx + 2 * jr) % len(names)]
-                    if nb not in cache:
-                        cache[nb], k = load(nb, CM[prefix_of(nb)])
-                        sizes.append((nb, cache[nb].size, k))
-                    half[side] = cache[nb].width / 2
-                w_me = cache[name].width / 2
-                flip = (dx - w_me - half['l']) > (dx - w_me - half['r'])
-            if name.startswith('бутон') and not a.no_birds and BIRDS:
-                cy += a.bud_dy * PX_CM * S
-            if name == 'заяц_прыгает' and layer == 'A' and not a.no_birds and BIRDS:
-                # исходно прыгает вправо, задние лапы слева: лапы разворачиваем от бутонов с птицами
-                bl = sum(LAYERS['B'][(((i - 1) % a.nx) + jb) % 3].startswith('бутон') for jb in (jr - 1, jr))
-                br = sum(LAYERS['B'][(i + jb) % 3].startswith('бутон') for jb in (jr - 1, jr))
-                if bl != br:
-                    flip = bl > br
-            el = cache[name].transpose(Image.FLIP_LEFT_RIGHT) if flip else cache[name]
-            if name.startswith('бутон') and not a.no_birds and BIRDS:   # птица садится на верхний изгиб, стебель закрывает лапки
-                bn = BIRDS[bird_n % len(BIRDS)]
-                if bn not in cache:
-                    cache[bn], k = load(bn, CM[prefix_of(bn)])
-                    sizes.append((bn, cache[bn].size, k))
-                bird = cache[bn].transpose(Image.FLIP_LEFT_RIGHT) if bird_n % 4 in (1, 2) else cache[bn]
-                ax, ay, t = apex(el)
-                fx, fy = foot_anchor(bird)
-                bx = cx - el.width / 2 + ax - fx
-                by = cy - el.height / 2 + ay + 0.5 * t - fy
-                paste(bird, bx + bird.width / 2, by + bird.height / 2)
-                bird_n += 1
-            paste(el, cx, cy)
-            if name == 'заяц_спит' and not a.no_butterfly:     # бабочка (в 3/4, смотрит к морде) на носу
-                if 'бабочка_2' not in cache:
-                    cache['бабочка_2'], _ = load('бабочка_2', CM['бабочка'])
-                # исходная бабочка смотрит вправо; голову всегда к морде; наклон по часовой стрелке (у зеркального зайца зеркально)
-                b, body = make_butterfly(cache['бабочка_2'], head_left=not flip, angle=(-a.tilt if not flip else a.tilt))
-                tx, ty = nose(el, flip)
-                lx, ly = land(el, b, body, tx, -1 if flip else 1)
-                paste(b, cx - el.width / 2 + lx + b.width / 2, cy - el.height / 2 + ly + b.height / 2)
+
+
+def get(name):
+    if name not in cache:
+        cache[name], k = load(name, CM[prefix_of(name)])
+        sizes.append((name, cache[name].size, k))
+    return cache[name]
+
+
+def A_name(i, jr):
+    return LAYERS['A'][(i + 2 * jr) % len(LAYERS['A'])]
+
+
+def B_name(i, jr):
+    return LAYERS['B'][((i % a.nx) + (jr % nrows)) % len(LAYERS['B'])]
+
+
+birds_on = bool(BIRDS) and not a.no_birds
+
+
+def bud(n):
+    return n.startswith('бутон')
+
+
+# 1. зайцы: ориентации и сдвиги
+hares = {}
+for jr in range(nrows):
+    for i in range(a.nx):
+        name = A_name(i, jr)
+        get(name)
+        flip = (i + jr) % 2 == 1
+        if name == 'заяц_спит':                          # нос (с бабочкой) смотрит в сторону большего просвета
+            me = cache[name].width / 2
+            wl, wr = get(A_name((i - 1) % a.nx, jr)).width / 2, get(A_name((i + 1) % a.nx, jr)).width / 2
+            flip = (dx - me - wl) > (dx - me - wr)
+        if name == 'заяц_прыгает' and birds_on:        # исходно лапы слева: разворачиваем от бутонов с птицами
+            up = (jr - 1) % nrows
+            bl = sum(bud(B_name(i - 1, jb)) for jb in (up, jr))
+            br = sum(bud(B_name(i, jb)) for jb in (up, jr))
+            if bl != br:
+                flip = bl > br
+        hares[(i, jr)] = [name, flip, 0.0]
+if not a.no_butterfly:
+    get('бабочка_2')
+    over = 0.6 * cache['бабочка_2'].width                # на сколько бабочка выступает за кончик носа
+    for (i, jr), (name, flip, _) in list(hares.items()):
+        if name != 'заяц_спит':
+            continue
+        d = -1 if flip else 1                            # сторона носа
+        j, k = ((i + d) % a.nx, jr), ((i + 2 * d) % a.nx, jr)
+        w_s, w_n, w_m = cache[name].width, cache[hares[j][0]].width, cache[hares[k][0]].width
+        gap_s = dx - (w_s / 2 + over) - w_n / 2          # просвет от бабочки до соседа
+        gap_o = dx - w_n / 2 - w_m / 2                   # просвет соседа с другой стороны
+        hares[j][2] += d * max(0.0, min((gap_o - gap_s) / 2, a.max_shift * PX_CM * S))
+
+for (i, jr), (name, flip, sh) in hares.items():
+    cx, cy = ox + i * dx + sh, oy + 2 * jr * dy
+    el = cache[name].transpose(Image.FLIP_LEFT_RIGHT) if flip else cache[name]
+    paste(el, cx, cy)
+    if name == 'заяц_спит' and not a.no_butterfly:       # бабочка (в 3/4, смотрит к морде) на носу
+        # исходная бабочка смотрит вправо; голову всегда к морде; наклон по часовой стрелке (у зеркального зайца зеркально)
+        b, body = make_butterfly(cache['бабочка_2'], head_left=not flip, angle=(-a.tilt if not flip else a.tilt))
+        tx, ty = nose(el, flip)
+        lx, ly = land(el, b, body, tx, -1 if flip else 1)
+        paste(b, cx - el.width / 2 + lx + b.width / 2, cy - el.height / 2 + ly + b.height / 2)
+
+# 2. нечётные ряды: дуб, ягоды, бутон (с птицей), анемона
+bird_n = 0
+for jr in range(nrows):
+    for i in range(a.nx):
+        name = B_name(i, jr)
+        get(name)
+        cx, cy = ox + (i + 0.5) * dx, oy + (2 * jr + 1) * dy
+        el = cache[name].transpose(Image.FLIP_LEFT_RIGHT) if (i + jr) % 2 == 1 else cache[name]
+        if bud(name) and birds_on:                       # бутон ниже; птица садится на верхний изгиб, стебель закрывает лапки
+            cy += a.bud_dy * PX_CM * S
+            bn = BIRDS[bird_n % len(BIRDS)]
+            bird = get(bn)
+            bird = bird.transpose(Image.FLIP_LEFT_RIGHT) if bird_n % 4 in (1, 2) else bird
+            ax, ay, t = apex(el)
+            fx, fy = foot_anchor(bird)
+            bx = cx - el.width / 2 + ax - fx
+            by = cy - el.height / 2 + ay + 0.5 * t - fy
+            paste(bird, bx + bird.width / 2, by + bird.height / 2)
+            bird_n += 1
+        paste(el, cx, cy)
+
+
+# 3. филлеры: листы режутся на отдельные детали, детали садятся в самые большие пустоты (по очереди, равномерно)
+def split_pieces(name):
+    im = Image.open(os.path.join(a.shelf, name + '.png')).convert('RGBA')
+    arr = np.array(im)
+    al = arr[..., 3] > 40
+    lab, n = ndi.label(al, structure=np.ones((3, 3)))
+    areas = ndi.sum(al, lab, range(1, n + 1))
+    out = []
+    for k, ar in enumerate(areas, 1):
+        if ar < 0.002 * al.size:
+            continue
+        m = lab == k
+        ys, xs = np.nonzero(m)
+        pc = arr.copy()
+        pc[..., 3] = np.where(m, arr[..., 3], 0)
+        out.append(Image.fromarray(pc).crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1)))
+    big = max(max(p.size) for p in out)
+    k = a.fill_cm * PX_CM * S / big                      # самая крупная деталь листа = fill_cm, остальные пропорционально
+    return [p.resize((max(1, int(p.width * k)), max(1, int(p.height * k))), Image.LANCZOS) for p in out]
+
+
+n_fill = 0
+if not a.no_fillers:
+    pool = [pc for sh in FILLER_SHEETS for pc in split_pieces(sh)]
+    print(f'деталей филлера: {len(pool)}, крупнейшая {max(max(p.size) for p in pool) / PX_CM / S:.1f} см')
+    DF = 10
+    MWc, MHc = -(-W // DF), -(-H // DF)
+    margin = a.fill_gap * PX_CM * S / DF
+    while n_fill < a.fill_max:
+        occ = np.array(occ_alpha.resize((MWc, MHc), Image.BOX)) > 8
+        dist = ndi.distance_transform_edt(~np.tile(occ, (3, 3)))[MHc:2 * MHc, MWc:2 * MWc]
+        cyc, cxc = np.unravel_index(np.argmax(dist), dist.shape)
+        best = dist[cyc, cxc]
+        cand = [p for p in pool if 0.5 * math.hypot(*p.size) / DF + margin <= best]
+        if not cand:
+            break
+        pc = rnd.choice(cand).rotate(rnd.uniform(0, 360), resample=Image.BICUBIC, expand=True)
+        paste(pc, cxc * DF + DF / 2, cyc * DF + DF / 2)
+        n_fill += 1
+print('филлеров поставлено:', n_fill)
 
 print('размеры на ткани (см):')
 for n, (w, h), k in sizes:
