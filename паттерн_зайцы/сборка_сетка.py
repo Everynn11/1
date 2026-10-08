@@ -36,8 +36,11 @@ ap.add_argument('--layers', default='A,B')
 ap.add_argument('--bg', default='ECE5D8')
 ap.add_argument('--scale', type=float, default=1.0)     # 0.25 = черновик
 ap.add_argument('--quality', type=int, default=95)
+ap.add_argument('--size', type=float, default=1.07)     # общий множитель размеров элементов (шаг сетки не меняется)
 ap.add_argument('--trellis', default='')                # цвет решётки (HEX), напр. D9CFBA; пусто = без решётки
 ap.add_argument('--trellis-w', type=float, default=1.8)  # толщина линий решётки, мм
+ap.add_argument('--land-dx', type=float, default=0.22)   # смещение бабочки от кончика носа, доля её ширины
+ap.add_argument('--land-gap', type=float, default=0.0)   # поднять бабочку над точкой касания, доля её высоты
 ap.add_argument('--no-butterfly', action='store_true')  # бабочка на носу спящего зайца
 ap.add_argument('--check', action='store_true')
 a = ap.parse_args()
@@ -59,7 +62,7 @@ def load(name, cm):
     bb = im.getchannel('A').point(lambda v: 255 if v > 10 else 0).getbbox()
     im = im.crop(bb)
     mass = math.sqrt((np.array(im.getchannel('A')) > 40).sum())
-    k = cm * PX_CM * S / mass
+    k = cm * a.size * PX_CM * S / mass
     return im.resize((max(1, int(im.width * k)), max(1, int(im.height * k))), Image.LANCZOS), k
 
 
@@ -74,13 +77,33 @@ def paste(el, cx, cy):
 
 
 def nose(el, flipped):
-    """Нос спящего зайца: на исходной картинке он на самом правом краю."""
+    """Кончик носа спящего зайца: на исходной картинке он на самом правом краю.
+    Возвращает x кончика и y самой верхней точки носа в самом краю."""
     al = np.array(el.getchannel('A')) > 40
     cols = np.nonzero(al.any(axis=0))[0]
-    c = cols[-1] if not flipped else cols[0]
-    band = cols[-max(3, len(cols) // 40):] if not flipped else cols[:max(3, len(cols) // 40)]
+    n = max(3, len(cols) // 60)
+    band = cols[:n] if flipped else cols[-n:]
+    tip = cols[0] if flipped else cols[-1]
     ys = np.nonzero(al[:, band].any(axis=1))[0]
-    return int(c), int(ys.mean())
+    return int(tip), int(ys.min())
+
+
+def land(el, b, tip_x, side):
+    """Опускает бабочку b на нос зайца el до первого касания пикселями («едва касаясь»).
+    tip_x — x кончика носа в координатах el; side=+1 бабочка смещена от кончика носа к краю (нос справа), -1 слева.
+    Возвращает левый верхний угол бабочки в координатах el."""
+    ea = np.array(el.getchannel('A')) > 40
+    ba = np.array(b.getchannel('A')) > 40
+    bx = int(tip_x + side * a.land_dx * b.width - b.width / 2)
+    y = -b.height - 5
+    while y < el.height:
+        x0, x1 = max(bx, 0), min(bx + b.width, el.width)
+        y0, y1 = max(y, 0), min(y + b.height, el.height)
+        if x1 > x0 and y1 > y0:
+            if (ea[y0:y1, x0:x1] & ba[y0 - y:y1 - y, x0 - bx:x1 - bx]).any():
+                return bx, y - int(a.land_gap * b.height)   # чуть приподнимаем: касание, не врезание
+        y += 1
+    return bx, y
 
 
 if a.trellis:                                            # ромбическая решётка сквозь узлы A и B, под элементами
@@ -109,6 +132,16 @@ for layer in a.layers.split(','):
             cx = ox + i * dx + (0.5 * dx if layer in 'BC' else 0)
             cy = oy + (2 * jr + (1 if layer in 'BD' else 0)) * dy
             flip = (i + jr) % 2 == 1
+            if name == 'заяц_спит' and layer == 'A':           # нос (с бабочкой) смотрит в сторону большего просвета
+                half = {}
+                for side, di in (('l', -1), ('r', 1)):
+                    nb = names[((i + di) % a.nx + 2 * jr) % len(names)]
+                    if nb not in cache:
+                        cache[nb], k = load(nb, CM[prefix_of(nb)])
+                        sizes.append((nb, cache[nb].size, k))
+                    half[side] = cache[nb].width / 2
+                w_me = cache[name].width / 2
+                flip = (dx - w_me - half['l']) > (dx - w_me - half['r'])
             el = cache[name].transpose(Image.FLIP_LEFT_RIGHT) if flip else cache[name]
             paste(el, cx, cy)
             if name == 'заяц_спит' and not a.no_butterfly:     # бабочка (в 3/4, смотрит к морде) на носу
@@ -117,9 +150,9 @@ for layer in a.layers.split(','):
                 b = cache['бабочка_2']
                 if not flip:
                     b = b.transpose(Image.FLIP_LEFT_RIGHT)    # исходная смотрит вправо, нос справа: зеркалим к морде
-                nx_, ny_ = nose(el, flip)
-                px, py = cx - el.width / 2 + nx_, cy - el.height / 2 + ny_
-                paste(b, px + (-1 if not flip else 1) * 0.10 * b.width, py - 0.45 * b.height)
+                tx, ty = nose(el, flip)
+                lx, ly = land(el, b, tx, -1 if flip else 1)
+                paste(b, cx - el.width / 2 + lx + b.width / 2, cy - el.height / 2 + ly + b.height / 2)
 
 print('размеры на ткани (см):')
 for n, (w, h), k in sizes:
