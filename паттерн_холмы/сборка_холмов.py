@@ -13,7 +13,7 @@ ap.add_argument('--elems', default='элементы'); ap.add_argument('--out',
 ap.add_argument('--w', type=int, default=2175); ap.add_argument('--h', type=int, default=2175)
 ap.add_argument('--cols', type=int, default=9)            # холмиков в ряду по ширине плитки
 ap.add_argument('--overlap', type=float, default=1.30)    # ширина холмика / шаг по x
-ap.add_argument('--rowfrac', type=float, default=0.50)    # шаг рядов / высота холмика (чем меньше, тем плотнее перекрытие)
+ap.add_argument('--rowfrac', type=float, default=0.42)    # шаг рядов / ширина холмика: виден только верх (дуга + немного заливки), остальное закрывает ряд ниже
 ap.add_argument('--jx', type=float, default=0.14); ap.add_argument('--jy', type=float, default=0.12)   # разброс положения, доли шага
 ap.add_argument('--scale', type=float, default=0.15); ap.add_argument('--rot', type=float, default=5.0)
 ap.add_argument('--tone', type=float, default=0.09)       # разброс яркости холмика
@@ -29,7 +29,7 @@ lib = [Image.open(f).convert('RGBA') for f in files]
 assert lib, 'нет элементов в ' + a.elems
 mh = float(np.mean([im.height * (W / a.cols * a.overlap) / im.width for im in lib]))      # средняя высота холмика при целевой ширине
 px = W / a.cols
-rows = max(2, round(H / (mh * a.rowfrac))); py = H / rows
+rows = max(2, round(H / (px * a.overlap * a.rowfrac))); py = H / rows           # шаг рядов от ШИРИНЫ, а не высоты: юбка любой длины не раздвигает ряды
 print(f'элементов {len(lib)}; шаг по x {px:.0f}, рядов {rows}, шаг по y {py:.0f}, средняя высота холмика {mh:.0f} ({mh / py:.1f} шагов)')
 
 # ---- расстановка: (row, x, y_верх, id, scale, rot, flip, tone)

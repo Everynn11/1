@@ -1,5 +1,5 @@
-# Из дуг, снятых с образца (дуги.json), делает направляющие листы для Gemini: 3×3 силуэта холмиков
-# (серая линия = дуга, светло-серая область = холмик с длинной юбкой). Кривые сглаживаются и слегка варьируются
+# Из дуг, снятых с образца (дуги.json), делает направляющие листы для Gemini: 2×3 силуэта холмиков (клетки-портреты)
+# (серая линия = дуга, светло-серая область = ЦЕЛЫЙ холмик с длинной юбкой, 1.5 ширины). Кривые сглаживаются и слегка варьируются
 # (±разброс по ширине/высоте/зеркало), это геометрия формы, а не копия рисунка.
 #   python -I направляющие_дуги.py --arcs дуги.json --out направляющие --n 18
 import argparse, json, os, random
@@ -24,16 +24,16 @@ F = np.array([[i['w'] / 200, i['rise'] * 4, i['apex'] * 2, i['tilt'] * 4] for i 
 while len(pick) < min(a.n, len(items)):
     d = np.min(np.linalg.norm(F[:, None] - F[pick][None], axis=2), axis=1); d[pick] = -1; pick.append(int(d.argmax()))
 sel = [items[i] for i in pick]; wmax = max(i['w'] for i in sel)
-S = a.size; cell = S // 3; sheets = (len(sel) + 8) // 9; scale = 0.80 * cell / wmax      # самый широкий холмик = 80% клетки, высота с юбкой 1.05 ширины влезает
+S = a.size; cw, ch = S // 3, S // 2; per = 6; sheets = (len(sel) + per - 1) // per; SKIRT = 1.5; scale = 0.82 * cw / wmax   # клетка 667×1000 (портрет), самый широкий холмик = 82% ширины клетки, высота с юбкой 1.5 ширины
 for sh in range(sheets):
     im = Image.new('RGB', (S, S), (255, 255, 255)); d = ImageDraw.Draw(im)
-    for k, it in enumerate(sel[sh * 9:sh * 9 + 9]):
-        r_, c_ = divmod(k, 3); cx, cy = c_ * cell + cell // 2, r_ * cell + cell // 2
+    for k, it in enumerate(sel[sh * per:sh * per + per]):
+        r_, c_ = divmod(k, 3); cx, cy = c_ * cw + cw // 2, r_ * ch + ch // 2
         sw = rnd.uniform(0.93, 1.07); sr = rnd.uniform(0.9, 1.1); flip = rnd.random() < 0.5
         W = it['w'] * scale * sw                                        # одинаковый масштаб для всех: относительные размеры сохраняются
         pts = [((g - 0.5) * W, y / it['w'] * W * sr) for g, y in zip(it['g'], it['y'])]
         if flip: pts = [(-x, y) for x, y in pts][::-1]
-        top = min(p[1] for p in pts); hgt = 1.05 * W                        # высота от вершины до нижнего края не меньше ширины
+        top = min(p[1] for p in pts); hgt = SKIRT * W                        # полный холмик: от вершины до нижнего края 1.5 ширины (длинная юбка)
         P = [(cx + x, cy - hgt / 2 + (y - top)) for x, y in pts]            # вершина на cy - hgt/2, низ на cy + hgt/2
         bottom = cy + hgt / 2
         poly = P + [(P[-1][0], bottom), (P[0][0], bottom)]
