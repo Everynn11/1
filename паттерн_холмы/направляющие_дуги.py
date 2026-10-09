@@ -64,6 +64,7 @@ for sh_ in range(sheets):
         P = sp['P'] * scale; top = sp['top'] * scale; hh = sp['hh'] * scale
         xm = (P[:, 0].min() + P[:, 0].max()) / 2
         Q = [(cx + x - xm, cy - hh / 2 + (y - top)) for x, y in P]; bottom = cy + hh / 2
-        d.polygon(Q + [(Q[-1][0], bottom), (Q[0][0], bottom)], fill=(222, 222, 222)); d.line(Q, fill=(95, 95, 95), width=11, joint='curve')
+        Q = [(Q[0][0], bottom)] + Q + [(Q[-1][0], bottom)]                  # линия идёт по верху, плечам и вниз по обеим сторонам до основания: оба конца на одной горизонтали
+        d.polygon(Q, fill=(222, 222, 222)); d.line(Q, fill=(95, 95, 95), width=11, joint='curve')
     im.save(os.path.join(a.out, f'дуги_лист_{sh_ + 1}.png')); print('лист', sh_ + 1)
 json.dump([dict(w=i['w'], rise=i['rise'], apex=i['apex'], tilt=i['tilt']) for i in sel], open(os.path.join(a.out, 'выбранные_дуги.json'), 'w'))
