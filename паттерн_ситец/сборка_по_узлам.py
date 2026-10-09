@@ -15,19 +15,17 @@ ap.add_argument('--margin', type=int, default=36)          # нахлёст со
 ap.add_argument('--dir', default='лента')
 ap.add_argument('--bg', default='')
 ap.add_argument('--cut', type=int, default=46)             # радиус перерисовки «над» вокруг узла, px
+ap.add_argument('--params', default='узлы/подбор_v2.json')
 a = ap.parse_args()
 
 R = a.size
 # линия: (p, q) — сколько сторон плитки проходит лоза по x и y за петлю; c — смещение (доля R); для вертикали x0
 import json
-PH = json.load(open('узлы/сдвиги_подобраны.json', encoding='utf8'))     # ph и зеркало каждой ленты, подбор: узлы/подбор_сдвигов.py
-LINES = [
-    dict(p=1, q=1, c=0.00, rib='по_узлам_A', flip=PH['A']['flip'], ph=PH['A']['ph']),
-    dict(p=1, q=-1, c=0.40, rib='по_узлам_B', flip=PH['B']['flip'], ph=PH['B']['ph']),
-    dict(p=1, q=2, c=0.15, rib='по_узлам_C', flip=PH['C']['flip'], ph=PH['C']['ph']),
-    dict(p=2, q=1, c=0.62, rib='по_узлам_D', flip=PH['D']['flip'], ph=PH['D']['ph']),
-    dict(p=0, q=1, c=0.00, x0=0.55, rib='по_узлам_E', flip=PH['E']['flip'], ph=PH['E']['ph']),
-]
+PH = json.load(open(a.params, encoding='utf8'))     # flip, ph, c, x0 каждой ленты: узлы/подбор_v2.py (или сдвиги_подобраны.json)
+GEO = dict(A=(1, 1), B=(1, -1), C=(1, 2), D=(2, 1), E=(0, 1))
+C0 = dict(A=0.00, B=0.40, C=0.15, D=0.62, E=0.0); X00 = dict(E=0.55)
+LINES = [dict(p=GEO[k][0], q=GEO[k][1], c=PH[k].get('c', C0[k]), x0=PH[k].get('x0', X00.get(k, 0.0)), rib='по_узлам_' + k,
+              flip=PH[k]['flip'], ph=PH[k]['ph']) for k in 'ABCDE']
 
 
 def vine_only(im):
