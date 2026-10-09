@@ -9,7 +9,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('--elems', default='спрайт
 ap.add_argument('--w', type=int, default=2175); ap.add_argument('--h', type=int, default=2175); ap.add_argument('--cols', type=int, default=3)
 ap.add_argument('--overlap', type=float, default=1.75); ap.add_argument('--rowfrac', type=float, default=0.15)
 ap.add_argument('--jx', type=float, default=0.05); ap.add_argument('--jy', type=float, default=0.05); ap.add_argument('--seed', type=int, default=1)
-ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10); ap.add_argument('--dropmin', type=float, default=0.0); ap.add_argument('--ramp', type=int, default=70); ap.add_argument('--look', type=int, default=110); ap.add_argument('--halfw', type=float, default=30.0); ap.add_argument('--halfl', type=float, default=85.0)
+ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10); ap.add_argument('--dropmin', type=float, default=0.0); ap.add_argument('--tex', default=''); ap.add_argument('--texmean', default='567783'); ap.add_argument('--ramp', type=int, default=70); ap.add_argument('--look', type=int, default=110); ap.add_argument('--halfw', type=float, default=30.0); ap.add_argument('--halfl', type=float, default=85.0)
 a = ap.parse_args(); W, H = a.w, a.h; rnd = random.Random(a.seed)
 lib = [dict(np.load(f)) for f in sorted(glob.glob(os.path.join(a.elems, '*.npz')))]; assert lib
 def _drop(d): C = d['C']; ap_ = int(np.argmin(C[:, 1])); return min(C[0, 1], C[-1, 1]) - C[ap_, 1]
@@ -30,11 +30,21 @@ for r in range(rows):
         pick = cand[0] if pick is None else pick; used[pick] += 1
         pl.append((r, x, y, pick, rnd.random() < 0.5, 1 + rnd.uniform(-a.tone, a.tone)))
 
+TEX = None
+if a.tex:                                                          # текстура заливки (Gemini): зеркальная раскладка = без швов, у каждого холмика свой случайный кусок
+    from PIL import Image as _I
+    _t = np.array(_I.open(a.tex).convert('RGB')).astype(float)
+    _t = _t * (np.array([int(a.texmean[i:i + 2], 16) for i in (0, 2, 4)]) / _t.reshape(-1, 3).mean(0))      # средний цвет к цели
+    TEX = np.clip(np.vstack([np.hstack([_t, _t[:, ::-1]]), np.hstack([_t[::-1], _t[::-1, ::-1]])]), 0, 255).astype(np.uint8)
+trnd = random.Random(a.seed + 99)
 def inst(p):
     r, x, y, i, fl, tone = p; d = lib[i]; fill, stroke, nmap, C = d['fill'].copy(), d['stroke'].copy(), d['nmap'].copy(), d['C'].copy()
     w = fill.shape[1]
     if fl:
         fill, stroke, nmap = fill[:, ::-1], stroke[:, ::-1], nmap[:, ::-1]; C[:, 0] = w - 1 - C[:, 0]; C = C[::-1]; nmap = (len(C) - 1 - nmap).astype(np.int16)
+    if TEX is not None:
+        hh, ww = fill.shape[:2]; oy = trnd.randrange(0, TEX.shape[0] - hh); ox = trnd.randrange(0, TEX.shape[1] - ww)
+        fill = fill.copy(); fill[..., :3] = TEX[oy:oy + hh, ox:ox + ww]
     if tone != 1:
         for L in (fill, stroke): L[..., :3] = np.clip(L[..., :3].astype(float) * tone, 0, 255).astype(np.uint8)
     return dict(fill=np.ascontiguousarray(fill), stroke=np.ascontiguousarray(stroke), nmap=np.ascontiguousarray(nmap), C=C, apex=int(np.argmin(C[:, 1])))
