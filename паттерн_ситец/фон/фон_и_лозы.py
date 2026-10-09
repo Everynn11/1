@@ -29,9 +29,9 @@ tile=Image.new('RGBA',(P,P),bgc+(255,))
 spots=[(0.25,0.25,leaves,0.50,18),(0.75,0.25,flowers,0.40,0),(0.25,0.75,flowers,0.40,40),(0.75,0.75,leaves,0.50,-25)]
 for fx,fy,pool,hh,rot in spots:
     m=tint(random.choice(pool),a.tint); m=fit(m,int(P*hh)).rotate(rot,expand=True,resample=Image.BICUBIC)
-    for ox in (-P,0,P):
+    for ox in (-P,0,P):                                        # обёртка по тору: часть, ушедшая за край, возвращается с другой стороны
         for oy in (-P,0,P):
-            tile.alpha_composite(m,(int(fx*P-m.width/2)+ox,int(fy*P-m.height/2)+oy)) if (0<=int(fx*P-m.width/2)+ox<P and 0<=int(fy*P-m.height/2)+oy<P) else None
+            tile.paste(m,(int(fx*P-m.width/2)+ox,int(fy*P-m.height/2)+oy),m)
 bg=Image.new('RGBA',(R,R))
 for x in range(a.n):
     for y in range(a.n): bg.paste(tile,(x*P,y*P))
@@ -41,4 +41,9 @@ for x in (0,1):
     for y in (0,1): t.paste(out,(x*R,y*R))
 t.resize((1600,1600),Image.LANCZOS).save(a.out.replace('.png','_2x2.jpg'),quality=90)
 o=np.array(out).astype(float); inner=(np.abs(o[:,1:]-o[:,:-1]).mean()+np.abs(o[1:]-o[:-1]).mean())/2
+# швы фона: разница на границах под-плиток (каждые P px) против обычных соседних столбцов/строк
+def seam(o,P):
+    cols=[np.abs(o[:,x]-o[:,x-1]).mean() for x in range(P,R,P)]; rows=[np.abs(o[y]-o[y-1]).mean() for y in range(P,R,P)]
+    return np.mean(cols),np.mean(rows)
+bgo=np.array(bg.convert('RGB')).astype(float); print('ФОН отдельно: на границах под-плиток %.2f / %.2f, внутри %.2f'%(*seam(bgo,P),(np.abs(bgo[:,1:]-bgo[:,:-1]).mean()+np.abs(bgo[1:]-bgo[:-1]).mean())/2))
 print('внутри %.2f; лево-право %.2f; верх-низ %.2f'%(inner,np.abs(o[:,-1]-o[:,0]).mean(),np.abs(o[-1]-o[0]).mean()))
