@@ -1,12 +1,12 @@
-# Процедурные холмики для сетки (вместо листов Gemini): форма = снятая с образца дуга (дуги.json) + плечи вниз (как в направляющих),
+# Процедурные холмики для сетки (вместо листов Gemini): форма = снятая с образца дуга (дуги_51.json) + плечи вниз,
 # тёмная полоса ТОЛЬКО по верху и плечам (с сужением к концам и неровным краем), под ней 1-3 светлые линии, заливка с мягкой акварельной текстурой.
-# Спрайты кладутся в папку, дальше обычная сборка: python -I сборка_холмов.py --elems спрайты ...
-#   python -I рисую_холмы.py --arcs дуги.json --out спрайты --n 24 --width 634
+# Спрайты (.npz: заливка, полосы, карта точек кривой) кладутся в папку, дальше сборка: python -I сборка_сетка.py --elems спрайты ... (см. ДОКУМЕНТАЦИЯ_холмы.md)
+#   python -I рисую_холмы.py --arcs дуги_51.json --out спрайты --n 24 --width 1268 --bandw 120
 import argparse, json, math, os
 import numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
-ap = argparse.ArgumentParser(); ap.add_argument('--arcs', default='дуги.json'); ap.add_argument('--out', default='спрайты'); ap.add_argument('--n', type=int, default=24)
+ap = argparse.ArgumentParser(); ap.add_argument('--arcs', default='дуги_51.json'); ap.add_argument('--out', default='спрайты'); ap.add_argument('--n', type=int, default=24)
 ap.add_argument('--width', type=int, default=634); ap.add_argument('--bandw', type=float, default=60.0); ap.add_argument('--maxang', type=float, default=80.0); ap.add_argument('--seed', type=int, default=7)
 ap.add_argument('--fill', default='567783'); ap.add_argument('--band', default='183442'); ap.add_argument('--ss', type=int, default=2)
 a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); rng = np.random.default_rng(a.seed); SS = a.ss
@@ -16,7 +16,9 @@ FILL, BAND = hexc(a.fill), hexc(a.band); WHITE, MINT = np.array([244, 246, 244.]
 # ---- дуги: сглаженный горб с одной вершиной
 arcs = []
 for c in json.load(open(a.arcs)):
-    x = np.array(c['x']); y = np.array(c['y']); w = x.max() - x.min(); u = (x - x.min()) / w
+    if 'p' in c:                                                          # компактный формат дуги_51.json: ширина w и коэффициенты кубики p (дуга уже отобрана)
+        g = np.linspace(0, 1, 60); yy = np.polyval(c['p'], g); yy -= yy.max(); arcs.append(dict(w=c['w'], g=g, y=yy)); continue
+    x = np.array(c['x']); y = np.array(c['y']); w = x.max() - x.min(); u = (x - x.min()) / w      # сырой формат дуги.json (снять_дуги.py): отбор здесь
     p = np.polyfit(u, y, 3); g = np.linspace(0, 1, 60); yy = np.polyval(p, g); yy -= yy.max()
     res = float(np.sqrt(np.mean((np.polyval(p, u) - y) ** 2)) / w); dy = np.diff(yy); sg = np.sign(dy[np.abs(dy) > 1e-3 * w])
     apex = float(g[yy.argmin()])
