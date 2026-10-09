@@ -9,7 +9,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('--elems', default='спрайт
 ap.add_argument('--w', type=int, default=2175); ap.add_argument('--h', type=int, default=2175); ap.add_argument('--cols', type=int, default=3)
 ap.add_argument('--overlap', type=float, default=1.75); ap.add_argument('--rowfrac', type=float, default=0.15)
 ap.add_argument('--jx', type=float, default=0.05); ap.add_argument('--jy', type=float, default=0.05); ap.add_argument('--seed', type=int, default=1)
-ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10); ap.add_argument('--dropmin', type=float, default=0.0); ap.add_argument('--tex', default=''); ap.add_argument('--texmean', default='567783'); ap.add_argument('--ramp', type=int, default=70); ap.add_argument('--look', type=int, default=110); ap.add_argument('--halfw', type=float, default=30.0); ap.add_argument('--halfl', type=float, default=85.0)
+ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10); ap.add_argument('--dropmin', type=float, default=0.0); ap.add_argument('--tex', default=''); ap.add_argument('--flat', default=''); ap.add_argument('--grain', type=float, default=0.0); ap.add_argument('--texmean', default='567783'); ap.add_argument('--ramp', type=int, default=70); ap.add_argument('--look', type=int, default=110); ap.add_argument('--halfw', type=float, default=30.0); ap.add_argument('--halfl', type=float, default=85.0)
 a = ap.parse_args(); W, H = a.w, a.h; rnd = random.Random(a.seed)
 lib = [dict(np.load(f)) for f in sorted(glob.glob(os.path.join(a.elems, '*.npz')))]; assert lib
 def _drop(d): C = d['C']; ap_ = int(np.argmin(C[:, 1])); return min(C[0, 1], C[-1, 1]) - C[ap_, 1]
@@ -42,6 +42,11 @@ def inst(p):
     w = fill.shape[1]
     if fl:
         fill, stroke, nmap = fill[:, ::-1], stroke[:, ::-1], nmap[:, ::-1]; C[:, 0] = w - 1 - C[:, 0]; C = C[::-1]; nmap = (len(C) - 1 - nmap).astype(np.int16)
+    if a.flat:                                                     # ровная заливка одного цвета, при желании с мелким зерном (амплитуда --grain, в уровнях яркости)
+        hh, ww = fill.shape[:2]; col = np.array([int(a.flat[i:i + 2], 16) for i in (0, 2, 4)], float)
+        g = trnd.gauss(0, 1) * 0
+        noise = np.random.default_rng(trnd.randrange(10**9)).normal(0, a.grain, (hh, ww, 1)) if a.grain > 0 else 0
+        fill = fill.copy(); fill[..., :3] = np.clip(col[None, None, :] + noise, 0, 255).astype(np.uint8)
     if TEX is not None:
         hh, ww = fill.shape[:2]; oy = trnd.randrange(0, TEX.shape[0] - hh); ox = trnd.randrange(0, TEX.shape[1] - ww)
         fill = fill.copy(); fill[..., :3] = TEX[oy:oy + hh, ox:ox + ww]
