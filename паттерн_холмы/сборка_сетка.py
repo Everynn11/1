@@ -9,9 +9,12 @@ ap = argparse.ArgumentParser(); ap.add_argument('--elems', default='спрайт
 ap.add_argument('--w', type=int, default=2175); ap.add_argument('--h', type=int, default=2175); ap.add_argument('--cols', type=int, default=3)
 ap.add_argument('--overlap', type=float, default=1.75); ap.add_argument('--rowfrac', type=float, default=0.15)
 ap.add_argument('--jx', type=float, default=0.05); ap.add_argument('--jy', type=float, default=0.05); ap.add_argument('--seed', type=int, default=1)
-ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10); ap.add_argument('--ramp', type=int, default=70); ap.add_argument('--look', type=int, default=110); ap.add_argument('--halfw', type=float, default=30.0); ap.add_argument('--halfl', type=float, default=85.0)
+ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10); ap.add_argument('--dropmin', type=float, default=0.0); ap.add_argument('--ramp', type=int, default=70); ap.add_argument('--look', type=int, default=110); ap.add_argument('--halfw', type=float, default=30.0); ap.add_argument('--halfl', type=float, default=85.0)
 a = ap.parse_args(); W, H = a.w, a.h; rnd = random.Random(a.seed)
 lib = [dict(np.load(f)) for f in sorted(glob.glob(os.path.join(a.elems, '*.npz')))]; assert lib
+def _drop(d): C = d['C']; ap_ = int(np.argmin(C[:, 1])); return min(C[0, 1], C[-1, 1]) - C[ap_, 1]
+if a.dropmin > 0:                                                  # отбор: оставить холмики одной крутизны, пологие/низкие выбиваются из ритма
+    n0 = len(lib); lib = [d for d in lib if _drop(d) >= a.dropmin]; print(f'по крутизне (>= {a.dropmin:.0f} px) оставлено {len(lib)} из {n0}')
 px = W / a.cols; rows = max(2, round(H / (px * a.overlap * a.rowfrac))); py = H / rows
 print(f'спрайтов {len(lib)}; шаг x {px:.0f}, рядов {rows}, шаг y {py:.0f}')
 used = [0] * len(lib); pl = []
