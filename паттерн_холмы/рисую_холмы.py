@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
 ap = argparse.ArgumentParser(); ap.add_argument('--arcs', default='дуги.json'); ap.add_argument('--out', default='спрайты'); ap.add_argument('--n', type=int, default=24)
-ap.add_argument('--width', type=int, default=634); ap.add_argument('--bandw', type=float, default=60.0); ap.add_argument('--maxang', type=float, default=52.0); ap.add_argument('--seed', type=int, default=7)
+ap.add_argument('--width', type=int, default=634); ap.add_argument('--bandw', type=float, default=60.0); ap.add_argument('--maxang', type=float, default=80.0); ap.add_argument('--seed', type=int, default=7)
 ap.add_argument('--fill', default='567783'); ap.add_argument('--band', default='183442'); ap.add_argument('--ss', type=int, default=2)
 a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); rng = np.random.default_rng(a.seed); SS = a.ss
 hexc = lambda h: np.array([int(h[i:i + 2], 16) for i in (0, 2, 4)], float)
@@ -95,12 +95,12 @@ def make_sprite(arc, idx):
     while _l > 0 and _ang[_l] < a.maxang: _l -= 1
     while _r < len(C) - 1 and _ang[_r] < a.maxang: _r += 1
     C = C[_l:_r + 1]; s = np.linspace(0, 1, len(C))                        # полоса только по верху и пологой части плеч, без хвостов вниз            # гладкая кривая: без изломов от разреженных точек дуги
-    taper = np.clip((np.minimum(s, 1 - s) / 0.22) ** 0.9, 0.0, 1)
+    taper = np.clip((np.minimum(s, 1 - s) / 0.22) ** 0.9, 0.62, 1)
     tilt = 1 + 0.28 * (2 * s - 1) * rng.choice([-1, 1])
     bw_s = a.bandw * SS * taper * tilt                                          # гладкая ширина (по ней идут светлые линии)
     bw_ = bw_s * (1 + 0.07 * ndi.gaussian_filter(rng.normal(0, 1, len(C)), 25) / 0.1)   # у самой полосы лёгкая живая неровность, без зубцов
     # светлые линии: 1-3, сразу под тёмной полосой, поверх заливки
-    nlines = int(rng.choice([1, 2, 2, 3])); lw = 20 * SS; col_f = col.copy()
+    nlines = int(rng.choice([1, 2, 2, 3])); lw = 20 * SS; lrgb = np.zeros((Hs, Ws, 3)); la = np.zeros((Hs, Ws))
     for k in range(nlines):
         off = bw_s * 0.5 + lw * (0.55 + 1.05 * k)
         wob = ndi.gaussian_filter(rng.normal(0, 1, len(C)), 8) * 0.18 * lw
@@ -109,20 +109,29 @@ def make_sprite(arc, idx):
         sl = (s > 0.14 + 0.04 * k) & (s < 0.86 - 0.04 * k); Ck = Ck[sl]
         wk = lw * np.clip((np.minimum(np.linspace(0, 1, len(Ck)), 1 - np.linspace(0, 1, len(Ck))) / 0.12) ** 0.7, 0.2, 1)
         m, _ = stroke((Hs, Ws), Ck, wk); m = ndi.gaussian_filter(m, 0.7 * SS / 2) * fmask
-        colr = WHITE if k % 2 == 0 else MINT; col_f = col_f * (1 - m[..., None]) + colr * m[..., None]
+        colr = WHITE if k % 2 == 0 else MINT; lrgb = lrgb * (1 - m[..., None]) + colr * m[..., None]; la = la + m * (1 - la)
     # тёмная полоса с неровным краем
     bm, _ = stroke((Hs, Ws), C, bw_)
     b = ndi.gaussian_filter(bm, 1.3 * SS / 2); nz = ndi.gaussian_filter(rng.normal(0, 1, (Hs, Ws)), 5.0 * SS / 2) * 4.0
     bmask = np.clip((b - 0.5 + 0.045 * nz) / 0.18 + 0.5, 0, 1)
     bcol = BAND[None, None, :] * (1 + 0.05 * f[..., None]) + rng.normal(0, 1.2, (Hs, Ws, 1))
-    rgb = col_f * (1 - bmask[..., None]) + bcol * bmask[..., None]
-    alpha = np.maximum(ndi.gaussian_filter(fmask, 0.8 * SS / 2), bmask)
-    im = Image.fromarray(np.dstack([np.clip(rgb, 0, 255), alpha * 255]).astype(np.uint8), 'RGBA')
-    k_ = a.width / (Ws - 2 * pad / 1) if False else 1 / SS
-    return im.resize((max(2, round(Ws / SS)), max(2, round(Hs / SS))), Image.LANCZOS)
+    fill_a = ndi.gaussian_filter(fmask, 0.8 * SS / 2)
+    sa = 1 - (1 - la) * (1 - bmask); srgb = (lrgb * la[..., None] * (1 - bmask[..., None]) + bcol * bmask[..., None]) / np.maximum(sa, 1e-4)[..., None]
+    def down(rgb, al):
+        im = Image.fromarray(np.dstack([np.clip(rgb, 0, 255), al * 255]).astype(np.uint8), 'RGBA'); return im.resize((max(2, round(Ws / SS)), max(2, round(Hs / SS))), Image.LANCZOS)
+    fl, st = down(col, fill_a), down(srgb, sa)
+    Cn = C / SS; h2, w2 = fl.size[1], fl.size[0]
+    # карта «индекс ближайшей точки кривой» по пикселям (нужна сборке, чтобы обрезать полосу там, где её накрывает сосед)
+    dens = np.c_[np.interp(np.arange(0, len(Cn) - 1, 0.25), np.arange(len(Cn)), Cn[:, 0]), np.interp(np.arange(0, len(Cn) - 1, 0.25), np.arange(len(Cn)), Cn[:, 1])]
+    lab = np.zeros((h2, w2), np.int32); xi = np.clip(np.round(dens[:, 0]).astype(int), 0, w2 - 1); yi = np.clip(np.round(dens[:, 1]).astype(int), 0, h2 - 1)
+    lab[yi, xi] = (np.arange(len(dens)) * 0.25 + 1).astype(np.int32)
+    idx = ndi.distance_transform_edt(lab == 0, return_distances=False, return_indices=True)
+    nmap = (lab[idx[0], idx[1]] - 1).astype(np.int16)
+    return dict(fill=np.array(fl), stroke=np.array(st), nmap=nmap, C=Cn.astype(np.float32))
 
 
 for i in range(a.n):
-    sp = make_sprite(arcs[i % len(arcs)], i)
-    sp.save(os.path.join(a.out, f'P{i + 1:02d}.png'))
-print('спрайтов', a.n, 'размер первого', sp.size)
+    d = make_sprite(arcs[i % len(arcs)], i)
+    np.savez_compressed(os.path.join(a.out, f'P{i + 1:02d}.npz'), **d)
+    Image.alpha_composite(Image.fromarray(d['fill']), Image.fromarray(d['stroke'])).save(os.path.join(a.out, f'P{i + 1:02d}.png'))
+print('спрайтов', a.n, 'размер первого', d['fill'].shape[:2])
