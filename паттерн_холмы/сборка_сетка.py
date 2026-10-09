@@ -9,7 +9,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('--elems', default='спрайт
 ap.add_argument('--w', type=int, default=2175); ap.add_argument('--h', type=int, default=2175); ap.add_argument('--cols', type=int, default=3)
 ap.add_argument('--overlap', type=float, default=1.75); ap.add_argument('--rowfrac', type=float, default=0.15)
 ap.add_argument('--jx', type=float, default=0.05); ap.add_argument('--jy', type=float, default=0.05); ap.add_argument('--seed', type=int, default=1)
-ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10)
+ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10); ap.add_argument('--ramp', type=int, default=70); ap.add_argument('--halfw', type=float, default=30.0); ap.add_argument('--halfl', type=float, default=85.0)
 a = ap.parse_args(); W, H = a.w, a.h; rnd = random.Random(a.seed)
 lib = [dict(np.load(f)) for f in sorted(glob.glob(os.path.join(a.elems, '*.npz')))]; assert lib
 px = W / a.cols; rows = max(2, round(H / (px * a.overlap * a.rowfrac))); py = H / rows
@@ -70,13 +70,22 @@ for k, (kc, n) in enumerate(order):
     def covered(t):
         X = int(round(C[t, 0])) + x0; Y = int(round(C[t, 1])) + y0
         return 0 <= Y < TH and owner[Y, X % W] > k
-    cl, cr = 0, len(C) - 1
+    tr, tl = len(C) - 1, 0                                       # индексы, где центр кривой впервые накрыт соседом (справа/слева от вершины)
     for t in range(ap_, len(C)):
-        if covered(t): cr = min(len(C) - 1, t + a.dive); break
+        if covered(t): tr = t; break
     for t in range(ap_, -1, -1):
-        if covered(t): cl = max(0, t - a.dive); break
-    cuts.append((cl, cr))
-    stroke = d['stroke'].copy(); nm = d['nmap']; stroke[..., 3] = np.where((nm >= cl) & (nm <= cr), stroke[..., 3], 0)
+        if covered(t): tl = t; break
+    cuts.append((tl, tr))
+    stroke = d['stroke'].copy(); nm = d['nmap'].astype(np.int32)
+    hh_, ww_ = nm.shape; yy_, xx_ = np.mgrid[0:hh_, 0:ww_]
+    dist = np.hypot(xx_ - C[nm, 0], yy_ - C[nm, 1])                 # расстояние до центральной линии полосы
+    dark = stroke[..., :3].astype(int).mean(axis=2) < 100
+    lim = np.where(dark, a.halfw, a.halfl)
+    # справа: после tr полоса сужается в клин за ramp индексов и исчезает под соседом; слева аналогично. Прямых срезов нет.
+    fr = np.clip(1 - (nm - tr) / a.ramp, 0, 1); fl_ = np.clip(1 - (tl - nm) / a.ramp, 0, 1)
+    frac = np.where(nm > ap_, fr, np.where(nm < ap_, fl_, 1.0))
+    keep = dist <= lim * frac + 1.5
+    stroke[..., 3] = np.where(keep | (frac >= 1), stroke[..., 3], 0)
     for layer in (d['fill'], stroke):
         L = Image.fromarray(layer)
         for xx, sx0, sy0, sx1, sy1 in blit(layer, x0, y0):
