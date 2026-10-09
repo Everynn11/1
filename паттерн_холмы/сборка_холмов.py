@@ -17,7 +17,8 @@ ap.add_argument('--rowfrac', type=float, default=0.50)    # шаг рядов / 
 ap.add_argument('--jx', type=float, default=0.14); ap.add_argument('--jy', type=float, default=0.12)   # разброс положения, доли шага
 ap.add_argument('--scale', type=float, default=0.15); ap.add_argument('--rot', type=float, default=5.0)
 ap.add_argument('--tone', type=float, default=0.09)       # разброс яркости холмика
-ap.add_argument('--bgcol', default='1f4358')              # тёмный фон под всем (щели между холмиками)
+ap.add_argument('--bgcol', default='1f4358')              # цвет ТОЛЬКО на случай дыр; дыр быть не должно (см. --skirt, проверяется)
+ap.add_argument('--skirt', type=float, default=2.2)       # минимальная длина холмика с юбкой, в шагах рядов; при дырах растёт само
 ap.add_argument('--wash', type=float, default=0.05); ap.add_argument('--grain', type=float, default=2.0)
 ap.add_argument('--seed', type=int, default=1)
 a = ap.parse_args()
@@ -48,16 +49,27 @@ for r in range(rows):
             if all(not (p[3] == i and tdist(x, y % H, p[1], p[2] % H) < 2.6 * px) for p in pl): pick = i; break
         if pick is None: pick = cand[0]
         used[pick] += 1
-        pl.append((r, x, y, pick, 1 + rnd.uniform(-a.scale, a.scale), rnd.uniform(-a.rot, a.rot), rnd.random() < 0.5, 1 + rnd.uniform(-a.tone, a.tone)))
+        pl.append((r, x, y, pick, 1 + rnd.uniform(-a.scale, a.scale), rnd.uniform(-a.rot, a.rot), rnd.random() < 0.5, 1 + rnd.uniform(-a.tone, a.tone), rnd.uniform(0.97, 1.03), rnd.uniform(0.97, 1.03), rnd.uniform(0.97, 1.03)))
 
-def make(p):
-    r, x, y, i, sc, rot, fl, tone = p
+def make(p, sk):
+    r, x, y, i, sc, rot, fl, tone, t1, t2, t3 = p
     im = lib[i]; tw = px * a.overlap * sc; k = tw / im.width
-    im = im.resize((max(2, round(im.width * k)), max(2, round(im.height * k * rnd.uniform(0.95, 1.08)))), Image.LANCZOS)
+    w = max(2, round(im.width * tw / im.width)); h = max(2, round(im.height * k))
+    need = round(sk * py)                                              # нужная высота холмика, чтобы закрыть всё под собой
+    im = im.resize((w, h), Image.LANCZOS)
+    if h < need:                                                       # удлиняем ЮБКУ отражением куска заливки (без растяжения: растяжение даёт вертикальные полосы)
+        tail = round(h * 0.16); band = im.crop((0, round(h * 0.52), w, h - tail)); bh = band.height
+        parts = [im.crop((0, 0, w, h - tail))]; cur = h - tail; flip = True
+        while cur < need - tail:
+            b = band.transpose(Image.FLIP_TOP_BOTTOM) if flip else band
+            take = min(bh, need - tail - cur); parts.append(b.crop((0, 0, w, take))); cur += take; flip = not flip
+        parts.append(im.crop((0, h - tail, w, h)))
+        out = Image.new('RGBA', (w, sum(p.height for p in parts))); yy_ = 0
+        for p_ in parts: out.paste(p_, (0, yy_)); yy_ += p_.height
+        im = out
     if fl: im = im.transpose(Image.FLIP_LEFT_RIGHT)
     arr = np.array(im).astype(float)
-    tint = np.array([tone * rnd.uniform(0.97, 1.03), tone * rnd.uniform(0.97, 1.03), tone * rnd.uniform(0.97, 1.03)])
-    arr[..., :3] = np.clip(arr[..., :3] * tint, 0, 255)
+    arr[..., :3] = np.clip(arr[..., :3] * np.array([tone * t1, tone * t2, tone * t3]), 0, 255)
     im = Image.fromarray(arr.astype(np.uint8), 'RGBA')
     return im.rotate(rot, expand=True, resample=Image.BICUBIC, center=(im.width / 2, 0))     # поворот вокруг верха холмика
 
@@ -70,13 +82,20 @@ def blit(canvas, im, x0, y0):
         canvas.alpha_composite(im, (xx + sx0, y0 + sy0), (sx0, sy0, sx1, sy1))
 
 bg = tuple(int(a.bgcol[i:i + 2], 16) for i in (0, 2, 4)) + (255,)
-canvas = Image.new('RGBA', (W, H), bg)
-made = [make(p) for p in pl]
-# порядок: копия -1 (все ряды сверху вниз), копия 0, копия +1; видна только средняя
-for kc in (-1, 0, 1):
-    for p, im in zip(pl, made):
-        x0 = round(p[1] - im.width / 2); y0 = round(p[2] + kc * H)
-        blit(canvas, im, x0, y0)
+sk = a.skirt
+for attempt in range(7):
+    canvas = Image.new('RGBA', (W, H), (0, 0, 0, 0))                  # прозрачный холст: считаем, что осталось НЕ закрыто холмиками
+    made = [make(p, sk) for p in pl]
+    for kc in (-1, 0, 1):                                              # копия -1 (все ряды сверху вниз), копия 0, копия +1; видна средняя
+        for p, im in zip(pl, made):
+            blit(canvas, im, round(p[1] - im.width / 2), round(p[2] + kc * H))
+    hole = (np.array(canvas)[..., 3] < 235).mean()
+    print(f'юбка {sk:.2f} шагов: не закрыто холмиками {100 * hole:.3f}% площади')
+    if hole < 1e-5: break
+    sk *= 1.25
+else:
+    print('ВНИМАНИЕ: дыры остались, увеличь --skirt или --overlap')
+base = Image.new('RGBA', (W, H), bg); base.alpha_composite(canvas); canvas = base
 out = np.array(canvas.convert('RGB')).astype(float)
 
 # ---- общий слой: медленные цветовые пятна (периодичны: целые волновые числа) и зерно бумаги (шум на торе)
