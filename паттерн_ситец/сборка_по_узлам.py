@@ -29,26 +29,27 @@ LINES = [dict(p=GEO[k][0], q=GEO[k][1], c=PH[k].get('c', C0[k]), x0=PH[k].get('x
               flip=PH[k]['flip'], ph=PH[k]['ph']) for k in PH]
 
 
-def vine_only(im):
+GUIDE = dict(A='синяя', B='красная', C='зелёная', D='оранжевая')
+GCOL = dict(A=(40, 90, 220), B=(220, 50, 50), C=(30, 150, 60), D=(240, 140, 10))
+
+
+def vine_only(im, key=None, half=9):
+    """Маска «только стебель»: непрозрачные пиксели ближе half px к кривой направляющей (цветная линия в узлы/направляющая_v3_*).
+    Раньше маску растили заливкой по цвету от левого края — цвет стебля плывёт, заливка обрывалась на трети ленты и узлов не находилось."""
     arr = np.array(im)
-    x = 8
-    ys = np.where(arr[:, x, 3] > 200)[0]
-    groups = np.split(ys, np.where(np.diff(ys) > 3)[0] + 1)
-    g = groups[-1]
-    sy = int(g.mean())
-    seed = arr[sy - 2:sy + 3, x - 2:x + 3, :3].reshape(-1, 3).mean(axis=0)
-    d = np.abs(arr[..., :3].astype(int) - seed[None, None, :]).max(axis=2)
-    cand = (d < 28) & (arr[..., 3] > 200)
-    lab, _ = ndi.label(cand, structure=np.ones((3, 3)))
-    m = lab == lab[sy, x]
-    m = ndi.binary_dilation(m, iterations=3) & (arr[..., 3] > 40)
+    g = np.array(Image.open(f'узлы/направляющая_v3_{key}_{GUIDE[key]}.png').convert('RGB')).astype(int)
+    curve = (np.abs(g - np.array(GCOL[key])).max(axis=2) < 40)
+    if curve.shape != arr.shape[:2]:
+        curve = np.array(Image.fromarray(curve.astype(np.uint8) * 255).resize((arr.shape[1], arr.shape[0]), Image.NEAREST)) > 0
+    dist = ndi.distance_transform_edt(~curve)
+    m = (dist <= half) & (arr[..., 3] > 40)
     out = arr.copy(); out[..., 3] = np.where(m, arr[..., 3], 0)
     return Image.fromarray(out)
 
 
 def load(name):
     im = Image.open(os.path.join(a.dir, name + '.png')).convert('RGBA')
-    return im, vine_only(im)
+    return im, vine_only(im, name[-1])
 
 
 def piece(im, T, flip, m):
@@ -118,7 +119,7 @@ for i in range(len(layers)):
                 continue
             ys, xs = np.nonzero(mk)
             node_list.append((i, j, xs.mean(), ys.mean()))
-print('узлов пересечения:', len(node_list))
+print('узлов пересечения:', len(node_list), [(round(x), round(y)) for _, _, x, y in node_list])
 yy, xx = np.mgrid[0:R, 0:R]
 for idx, (i, j, x, y) in enumerate(sorted(node_list, key=lambda t: (round(t[3] / 150), t[2]))):
     win = i if idx % 2 == 0 else j
