@@ -24,19 +24,46 @@ F = np.array([[i['w'] / 200, i['rise'] * 4, i['apex'] * 2, i['tilt'] * 4] for i 
 while len(pick) < min(a.n, len(items)):
     d = np.min(np.linalg.norm(F[:, None] - F[pick][None], axis=2), axis=1); d[pick] = -1; pick.append(int(d.argmax()))
 sel = [items[i] for i in pick]; wmax = max(i['w'] for i in sel)
-S = a.size; cw, ch = S // 3, S // 2; per = 6; sheets = (len(sel) + per - 1) // per; SKIRT = 1.5; scale = 0.82 * cw / wmax   # клетка 667×1000 (портрет), самый широкий холмик = 82% ширины клетки, высота с юбкой 1.5 ширины
-for sh in range(sheets):
+S = a.size; cw, ch = S // 3, S // 2; per = 6; sheets = (len(sel) + per - 1) // per
+
+
+def extend_right(P, W):
+    """Продолжает кривую вправо вниз с тем же (и не меньшим) изгибом, пока касательная не станет почти вертикальной."""
+    P = np.array(P, float); n = len(P)
+    ang = np.arctan2(np.diff(P[:, 1]), np.diff(P[:, 0])); seg = np.hypot(np.diff(P[:, 0]), np.diff(P[:, 1]))
+    m = max(3, n // 4); kap = (ang[-1] - ang[-1 - m]) / max(1e-6, seg[-m:].sum())      # кривизна на последней четверти
+    kap = max(kap, 1.6 / W)                                                          # не меньше: дуга обязана загибаться вниз
+    th = ang[-1]; x, y = P[-1]; out = []; ds = 2.0; L = 0
+    while th < np.radians(86) and L < 1.1 * W:
+        th += kap * ds; x += np.cos(th) * ds; y += np.sin(th) * ds; L += ds; out.append((x, y))
+    return np.vstack([P, out]) if out else P
+
+
+def mound(it, W, sr):
+    """Полный купол: сглаженная дуга (как снята с образца) + продолжение вниз по обе стороны до вертикали. Возвращает точки контура сверху (слева направо)."""
+    pts = np.array([((g - 0.5) * W, y / it['w'] * W * sr) for g, y in zip(it['g'], it['y'])])
+    R = extend_right(pts, W)
+    Lm = extend_right(pts[::-1] * np.array([-1, 1]), W)                               # левый конец: зеркалим, продолжаем, зеркалим назад
+    Lm = (Lm * np.array([-1, 1]))[::-1]
+    return np.vstack([Lm[:len(Lm) - len(pts)], R])                                    # левое продолжение + дуга + правое продолжение
+
+
+shapes = []
+for it in sel:
+    sr = rnd.uniform(0.9, 1.1); sw = rnd.uniform(0.93, 1.07); flip = rnd.random() < 0.5
+    W = it['w'] * sw; P = mound(it, W, sr)
+    if flip: P = (P * np.array([-1, 1]))[::-1]
+    top = P[:, 1].min(); bw = P[:, 0].max() - P[:, 0].min()
+    base = max(top + 1.45 * W, P[:, 1].max() + 0.25 * W)                              # основание: ниже плеч, юбка с прямыми боками
+    shapes.append(dict(P=P, base=base, bw=bw, hh=base - top, top=top))
+scale = min(0.88 * cw / max(sh['bw'] for sh in shapes), 0.92 * ch / max(sh['hh'] for sh in shapes))
+for sh_ in range(sheets):
     im = Image.new('RGB', (S, S), (255, 255, 255)); d = ImageDraw.Draw(im)
-    for k, it in enumerate(sel[sh * per:sh * per + per]):
+    for k, sp in enumerate(shapes[sh_ * per:sh_ * per + per]):
         r_, c_ = divmod(k, 3); cx, cy = c_ * cw + cw // 2, r_ * ch + ch // 2
-        sw = rnd.uniform(0.93, 1.07); sr = rnd.uniform(0.9, 1.1); flip = rnd.random() < 0.5
-        W = it['w'] * scale * sw                                        # одинаковый масштаб для всех: относительные размеры сохраняются
-        pts = [((g - 0.5) * W, y / it['w'] * W * sr) for g, y in zip(it['g'], it['y'])]
-        if flip: pts = [(-x, y) for x, y in pts][::-1]
-        top = min(p[1] for p in pts); hgt = SKIRT * W                        # полный холмик: от вершины до нижнего края 1.5 ширины (длинная юбка)
-        P = [(cx + x, cy - hgt / 2 + (y - top)) for x, y in pts]            # вершина на cy - hgt/2, низ на cy + hgt/2
-        bottom = cy + hgt / 2
-        poly = P + [(P[-1][0], bottom), (P[0][0], bottom)]
-        d.polygon(poly, fill=(222, 222, 222)); d.line(P, fill=(95, 95, 95), width=11, joint='curve')
-    im.save(os.path.join(a.out, f'дуги_лист_{sh + 1}.png')); print('лист', sh + 1)
+        P = sp['P'] * scale; top = sp['top'] * scale; hh = sp['hh'] * scale
+        xm = (P[:, 0].min() + P[:, 0].max()) / 2
+        Q = [(cx + x - xm, cy - hh / 2 + (y - top)) for x, y in P]; bottom = cy + hh / 2
+        d.polygon(Q + [(Q[-1][0], bottom), (Q[0][0], bottom)], fill=(222, 222, 222)); d.line(Q, fill=(95, 95, 95), width=11, joint='curve')
+    im.save(os.path.join(a.out, f'дуги_лист_{sh_ + 1}.png')); print('лист', sh_ + 1)
 json.dump([dict(w=i['w'], rise=i['rise'], apex=i['apex'], tilt=i['tilt']) for i in sel], open(os.path.join(a.out, 'выбранные_дуги.json'), 'w'))
