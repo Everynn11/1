@@ -37,10 +37,11 @@ main{flex:1;display:flex;min-width:0}
 .ph{display:flex;justify-content:space-between;align-items:center;padding:7px 12px;background:var(--panel);border-bottom:1px solid var(--line);color:var(--mut);font-size:12px;gap:10px}
 .ph b{color:var(--text);font-weight:600}
 .ph .z{display:flex;align-items:center;gap:6px}
-.ph .z input{width:110px}
-.pv{flex:1;display:flex;overflow:auto;background:#141518;padding:8px;position:relative}
-.pv canvas{margin:auto;display:block;flex:none;box-shadow:0 0 0 1px #000,0 6px 24px #0008}
-#c1{cursor:default;touch-action:none;background:#fff}
+.ph .z button{padding:2px 8px;font-size:12px}
+.ph .z .zl{min-width:44px;text-align:right;color:var(--text);font-variant-numeric:tabular-nums}
+.pv{flex:1;position:relative;overflow:hidden;background:#141518}
+.pv canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#c1{cursor:default;touch-action:none}
 #drop{position:absolute;inset:8px;border:2px dashed var(--acc);border-radius:10px;display:none;align-items:center;justify-content:center;color:var(--acc);font-size:18px;background:#000a;z-index:5;pointer-events:none}
 body.dragging #drop{display:flex}
 .hint{color:var(--mut);font-size:12px;margin-top:4px}
@@ -78,7 +79,7 @@ body.dragging #drop{display:flex}
       <button id="dup">Дублировать</button><button id="del">Удалить</button>
     </div>
   </div>
-  <div class="hint">Мышью: тащи элемент; квадрат в углу рамки — размер, кружок сверху — поворот; колесо над выбранным — размер. Всё, что выходит за край, появляется с противоположной стороны.</div>
+  <div class="hint">Мышью: тащи элемент; квадрат в углу рамки — размер, кружок сверху — поворот; колесо над выбранным — размер. Ctrl + колесо — плавный зум к курсору (в обоих окнах, до реальных пикселей и выше); колесо — прокрутка; правая или средняя кнопка — двигать вид (в сетке двигает и левая). Всё, что выходит за край, появляется с противоположной стороны.</div>
 
   <h2>Проект</h2>
   <div class="row"><label>Формат</label><select id="fmt"><option value="png">PNG</option><option value="jpg">JPG (95%)</option></select></div>
@@ -89,12 +90,12 @@ body.dragging #drop{display:flex}
 <main>
   <section class="pane">
     <div class="ph"><span><b>Тор</b> — одна плитка <span id="dim"></span></span>
-      <span class="z">вид <input type="range" id="z1" min="1" max="4" step="0.05" value="1"></span></div>
+      <span class="z"><span class="zl" id="zl1">100%</span><button id="one1">100%</button><button id="fit1">Вписать</button></span></div>
     <div class="pv" id="v1"><canvas id="c1"></canvas><div id="drop">Отпусти картинки, чтобы добавить</div></div>
   </section>
   <section class="pane">
     <div class="ph"><span><b>Сетка</b> <span id="gdim"></span></span>
-      <span class="z">вид <input type="range" id="z2" min="1" max="6" step="0.05" value="1"></span></div>
+      <span class="z"><span class="zl" id="zl2">100%</span><button id="one2">100%</button><button id="fit2">Вписать</button></span></div>
     <div class="pv" id="v2"><canvas id="c2"></canvas></div>
   </section>
 </main>
@@ -102,22 +103,22 @@ body.dragging #drop{display:flex}
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
-const S={W:2175,H:2175,bg:'#f5efe2',items:[],sel:null,cols:2,rows:2,bord:true,lines:false,z1:1,z2:1};
+const S={W:2175,H:2175,bg:'#f5efe2',items:[],sel:null,cols:2,rows:2,bord:true,lines:false};
 const imgs=new Map();            // key -> {img,src,w,h,name,ac}
-let uid=1,dirty=true;
+let uid=1,dirty=true,tileDirty=true;
 const tileC=document.createElement('canvas'), tg=tileC.getContext('2d');
 const c1=$('c1'),g1=c1.getContext('2d'),c2=$('c2'),g2=c2.getContext('2d');
-const prevC=document.createElement('canvas'), pg=prevC.getContext('2d');
 
 function setSize(w,h){
   S.W=Math.max(16,Math.round(w));S.H=Math.max(16,Math.round(h));
   tileC.width=S.W;tileC.height=S.H;
   for(const it of S.items)wrapItem(it);
   $('tw').value=S.W;$('th').value=S.H;$('dim').textContent=S.W+'×'+S.H;
-  layout();redraw();
+  layout(true);redraw();
 }
 function wrapItem(it){it.x=((it.x%S.W)+S.W)%S.W;it.y=((it.y%S.H)+S.H)%S.H}
-function redraw(){dirty=true;requestAnimationFrame(frame)}
+function redraw(){tileDirty=true;dirty=true;requestAnimationFrame(frame)}
+function redrawView(){dirty=true;requestAnimationFrame(frame)}
 
 // ---------- отрисовка плитки (с оборачиванием по тору) ----------
 function instances(it){
@@ -145,40 +146,83 @@ function renderTile(){
   }
 }
 
-// ---------- раскладка окон ----------
-function layout(){
-  const v1=$('v1'),v2=$('v2');
-  const pw1=v1.clientWidth-16,ph1=v1.clientHeight-16;
-  const f1=Math.min(pw1/S.W,ph1/S.H)*S.z1;
-  c1.style.width=Math.max(40,S.W*f1)+'px';c1.style.height=Math.max(40,S.H*f1)+'px';
-  c1.width=Math.max(40,Math.round(S.W*f1));c1.height=Math.max(40,Math.round(S.H*f1));
-  const pw2=v2.clientWidth-16,ph2=v2.clientHeight-16;
-  let f2=Math.min(pw2/(S.cols*S.W),ph2/(S.rows*S.H))*S.z2;
-  f2=Math.min(f2,6000/(S.cols*S.W),6000/(S.rows*S.H));
-  const tw=Math.max(2,Math.round(S.W*f2)),th=Math.max(2,Math.round(S.H*f2));
-  c2.width=tw*S.cols;c2.height=th*S.rows;
-  c2.style.width=c2.width+'px';c2.style.height=c2.height+'px';
-  prevC.width=tw;prevC.height=th;
+// ---------- виды: масштаб и сдвиг (канвас = окно, плитка рисуется с трансформацией) ----------
+const dpr=()=>window.devicePixelRatio||1;
+function mkView(cv,box){return {cv,box,g:cv.getContext('2d'),z:1,zt:1,cx:0,cy:0,vw:100,vh:100,anim:false,anchor:null}}
+const V1=mkView(c1,$('v1')),V2=mkView(c2,$('v2'));
+const MARGIN=0.96,KMAX=32;
+const contentSize=V=>V===V1?[S.W,S.H]:[S.cols*S.W,S.rows*S.H];
+const k0=V=>{const [cw,ch]=contentSize(V);return Math.min(V.vw/cw,V.vh/ch)*MARGIN};
+const kOf=V=>k0(V)*V.z;
+function resetView(V){const [cw,ch]=contentSize(V);V.z=V.zt=1;V.cx=cw/2;V.cy=ch/2;V.anim=false}
+function sizeView(V){const r=V.box.getBoundingClientRect(),d=dpr();V.vw=Math.max(40,r.width);V.vh=Math.max(40,r.height);V.cv.width=Math.round(V.vw*d);V.cv.height=Math.round(V.vh*d)}
+const toScreen=(V,x,y)=>{const k=kOf(V);return [V.vw/2+(x-V.cx)*k,V.vh/2+(y-V.cy)*k]};
+const toWorld=(V,sx,sy)=>{const k=kOf(V);return [V.cx+(sx-V.vw/2)/k,V.cy+(sy-V.vh/2)/k]};
+function clampView(V){const [cw,ch]=contentSize(V);V.cx=Math.min(cw,Math.max(0,V.cx));V.cy=Math.min(ch,Math.max(0,V.cy))}
+const localXY=(V,e)=>{const r=V.cv.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top]};
+const wdelta=e=>[e.deltaX*(e.deltaMode===1?16:1),e.deltaY*(e.deltaMode===1?16:1)];
+function layout(reset){
+  sizeView(V1);sizeView(V2);
+  if(reset){resetView(V1);resetView(V2)}
   $('gdim').textContent=S.cols+'×'+S.rows+' = '+(S.cols*S.W)+'×'+(S.rows*S.H)+' px';
-  dirty=true;
+  redrawView();
 }
+// плавный зум к курсору: цель zt, текущий z догоняет её по кадрам, точка под курсором остаётся на месте
+function zoomAt(V,sx,sy,factor){
+  const zmax=Math.max(1,KMAX/k0(V));
+  V.zt=Math.min(zmax,Math.max(0.5,V.zt*factor));
+  V.anchor={sx,sy,w:toWorld(V,sx,sy)};
+  if(!V.anim){V.anim=true;requestAnimationFrame(()=>stepZoom(V))}
+}
+function stepZoom(V){
+  const dz=V.zt-V.z;
+  V.z=Math.abs(dz)<V.z*0.002?V.zt:V.z+dz*0.28;
+  const k=kOf(V),a=V.anchor;
+  V.cx=a.w[0]-(a.sx-V.vw/2)/k;V.cy=a.w[1]-(a.sy-V.vh/2)/k;clampView(V);
+  redrawView();
+  if(V.z!==V.zt)requestAnimationFrame(()=>stepZoom(V));else V.anim=false;
+}
+function setZoom(V,z){V.z=V.zt=Math.min(Math.max(1,KMAX/k0(V)),Math.max(0.5,z));V.anim=false;clampView(V);redrawView()}
+let panning=null;
+function startPan(V,e){panning={V,x:e.clientX,y:e.clientY};V.cv.setPointerCapture(e.pointerId);e.preventDefault()}
+function movePan(e){
+  if(!panning)return false;
+  const V=panning.V,k=kOf(V);V.cx-=(e.clientX-panning.x)/k;V.cy-=(e.clientY-panning.y)/k;
+  panning.x=e.clientX;panning.y=e.clientY;clampView(V);redrawView();return true;
+}
+function updZoomLabels(){$('zl1').textContent=Math.round(kOf(V1)*100)+'%';$('zl2').textContent=Math.round(kOf(V2)*100)+'%'}
+
 function frame(){
   if(!dirty)return;dirty=false;
-  renderTile();
-  // вид 1: тор
-  g1.setTransform(1,0,0,1,0,0);g1.imageSmoothingEnabled=true;g1.imageSmoothingQuality='high';
-  g1.drawImage(tileC,0,0,c1.width,c1.height);
-  const k=c1.width/S.W;
-  if(S.bord){g1.strokeStyle='#ff3d6e';g1.lineWidth=1;g1.setLineDash([6,4]);g1.strokeRect(.5,.5,c1.width-1,c1.height-1);g1.setLineDash([])}
-  if(S.sel!=null)drawSel(S.items.find(i=>i.id===S.sel),k);
-  // вид 2: сетка
-  pg.setTransform(1,0,0,1,0,0);pg.imageSmoothingEnabled=true;pg.imageSmoothingQuality='high';
-  pg.clearRect(0,0,prevC.width,prevC.height);pg.drawImage(tileC,0,0,prevC.width,prevC.height);
-  for(let i=0;i<S.cols;i++)for(let j=0;j<S.rows;j++)g2.drawImage(prevC,i*prevC.width,j*prevC.height);
-  if(S.lines){g2.strokeStyle='rgba(255,61,110,.8)';g2.lineWidth=1;g2.setLineDash([6,4]);
-    for(let i=1;i<S.cols;i++){g2.beginPath();g2.moveTo(i*prevC.width+.5,0);g2.lineTo(i*prevC.width+.5,c2.height);g2.stroke()}
-    for(let j=1;j<S.rows;j++){g2.beginPath();g2.moveTo(0,j*prevC.height+.5);g2.lineTo(c2.width,j*prevC.height+.5);g2.stroke()}
-    g2.setLineDash([])}
+  if(tileDirty){renderTile();tileDirty=false}
+  drawView1();drawView2();updZoomLabels();
+}
+function drawView1(){
+  const V=V1,g=V.g,d=dpr(),k=kOf(V);
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,V.cv.width,V.cv.height);
+  const [ox,oy]=toScreen(V,0,0);
+  g.imageSmoothingEnabled=k<1.5;g.imageSmoothingQuality='high';
+  g.drawImage(tileC,ox*d,oy*d,S.W*k*d,S.H*k*d);
+  g.setTransform(d,0,0,d,0,0);
+  if(S.bord){g.strokeStyle='#ff3d6e';g.lineWidth=1;g.setLineDash([6,4]);g.strokeRect(ox-.5,oy-.5,S.W*k+1,S.H*k+1);g.setLineDash([])}
+  if(S.sel!=null)drawSel(g,S.items.find(i=>i.id===S.sel),k,ox,oy);
+}
+function drawView2(){
+  const V=V2,g=V.g,d=dpr(),k=kOf(V);
+  g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,V.cv.width,V.cv.height);
+  const [ox,oy]=toScreen(V,0,0);
+  g.imageSmoothingEnabled=k<1.5;g.imageSmoothingQuality='high';
+  const xs=[],ys=[];
+  for(let i=0;i<=S.cols;i++)xs.push(Math.round((ox+i*S.W*k)*d));
+  for(let j=0;j<=S.rows;j++)ys.push(Math.round((oy+j*S.H*k)*d));
+  for(let i=0;i<S.cols;i++)for(let j=0;j<S.rows;j++){
+    if(xs[i+1]<0||xs[i]>V.cv.width||ys[j+1]<0||ys[j]>V.cv.height)continue;
+    g.drawImage(tileC,xs[i],ys[j],xs[i+1]-xs[i],ys[j+1]-ys[j]);
+  }
+  if(S.lines){g.strokeStyle='rgba(255,61,110,.85)';g.lineWidth=1;g.setLineDash([6,4]);
+    for(let i=1;i<S.cols;i++){g.beginPath();g.moveTo(xs[i]+.5,0);g.lineTo(xs[i]+.5,V.cv.height);g.stroke()}
+    for(let j=1;j<S.rows;j++){g.beginPath();g.moveTo(0,ys[j]+.5);g.lineTo(V.cv.width,ys[j]+.5);g.stroke()}
+    g.setLineDash([])}
 }
 
 // ---------- рамка выделения и ручки ----------
@@ -193,17 +237,18 @@ function handles(it,cx,cy,k){
     top:toTile(it,cx,cy,0,-h/2)
   };
 }
-function drawSel(it,k){
+function drawSel(g,it,k,ox,oy){
   if(!it)return;
+  const X=p=>ox+p[0]*k,Y=p=>oy+p[1]*k;
   for(const [cx,cy] of instances(it)){
     const H=handles(it,cx,cy,k);
-    g1.save();g1.setLineDash([]);g1.lineWidth=1.5;g1.strokeStyle='#e3a82b';
-    g1.beginPath();H.corners.forEach((p,i)=>i?g1.lineTo(p[0]*k,p[1]*k):g1.moveTo(p[0]*k,p[1]*k));g1.closePath();g1.stroke();
-    g1.beginPath();g1.moveTo(H.top[0]*k,H.top[1]*k);g1.lineTo(H.rot[0]*k,H.rot[1]*k);g1.stroke();
-    g1.fillStyle='#1c1e22';
-    g1.beginPath();g1.arc(H.rot[0]*k,H.rot[1]*k,HR,0,7);g1.fill();g1.stroke();
-    g1.fillRect(H.scale[0]*k-HR,H.scale[1]*k-HR,HR*2,HR*2);g1.strokeRect(H.scale[0]*k-HR,H.scale[1]*k-HR,HR*2,HR*2);
-    g1.restore();
+    g.save();g.setLineDash([]);g.lineWidth=1.5;g.strokeStyle='#e3a82b';
+    g.beginPath();H.corners.forEach((p,i)=>i?g.lineTo(X(p),Y(p)):g.moveTo(X(p),Y(p)));g.closePath();g.stroke();
+    g.beginPath();g.moveTo(X(H.top),Y(H.top));g.lineTo(X(H.rot),Y(H.rot));g.stroke();
+    g.fillStyle='#1c1e22';
+    g.beginPath();g.arc(X(H.rot),Y(H.rot),HR,0,7);g.fill();g.stroke();
+    g.fillRect(X(H.scale)-HR,Y(H.scale)-HR,HR*2,HR*2);g.strokeRect(X(H.scale)-HR,Y(H.scale)-HR,HR*2,HR*2);
+    g.restore();
   }
 }
 
@@ -224,11 +269,14 @@ function hitItem(it,px,py,alpha){
   }
   return null;
 }
-function ptr(e){const b=c1.getBoundingClientRect();return [(e.clientX-b.left)/b.width*S.W,(e.clientY-b.top)/b.height*S.H]}
+const ptr=e=>{const [sx,sy]=localXY(V1,e);return toWorld(V1,sx,sy)};
 let drag=null;
+c1.addEventListener('contextmenu',e=>e.preventDefault());
+c2.addEventListener('contextmenu',e=>e.preventDefault());
 c1.addEventListener('pointerdown',e=>{
+  if(e.button===1||e.button===2){startPan(V1,e);return}
   if(e.button!==0)return;
-  const [px,py]=ptr(e),k=c1.width/S.W,tol=(HR+4)/k;
+  const [px,py]=ptr(e),k=kOf(V1),tol=(HR+4)/k;
   const sel=S.items.find(i=>i.id===S.sel);
   if(sel){
     for(const [cx,cy] of instances(sel)){
@@ -245,9 +293,10 @@ c1.addEventListener('pointerdown',e=>{
 });
 function cap(e){c1.setPointerCapture(e.pointerId)}
 c1.addEventListener('pointermove',e=>{
+  if(movePan(e))return;
   const [px,py]=ptr(e);
   if(!drag){
-    const k=c1.width/S.W,sel=S.items.find(i=>i.id===S.sel);let cur='default';
+    const k=kOf(V1),sel=S.items.find(i=>i.id===S.sel);let cur='default';
     if(sel){for(const [cx,cy] of instances(sel)){const H=handles(sel,cx,cy,k),tol=(HR+4)/k;
       if(Math.hypot(px-H.scale[0],py-H.scale[1])<=tol)cur='nwse-resize';else if(Math.hypot(px-H.rot[0],py-H.rot[1])<=tol)cur='crosshair'}}
     if(cur==='default')for(let i=S.items.length-1;i>=0;i--)if(hitItem(S.items[i],px,py,true)){cur='move';break}
@@ -259,16 +308,35 @@ c1.addEventListener('pointermove',e=>{
   else if(drag.mode==='rot'){it.r=Math.atan2(py-drag.c[1],px-drag.c[0])+Math.PI/2}
   syncProps();redraw();
 });
-c1.addEventListener('pointerup',()=>{drag=null});
-c1.addEventListener('pointercancel',()=>{drag=null});
+c1.addEventListener('pointerup',()=>{drag=null;panning=null});
+c1.addEventListener('pointercancel',()=>{drag=null;panning=null});
 c1.addEventListener('wheel',e=>{
-  const sel=S.items.find(i=>i.id===S.sel);if(!sel)return;
-  const [px,py]=ptr(e);
-  if(hitItem(sel,px,py,false)){e.preventDefault();sel.s=Math.max(0.01,sel.s*Math.exp(-e.deltaY*0.0015));syncProps();redraw()}
+  e.preventDefault();
+  const [sx,sy]=localXY(V1,e),[dx,dy]=wdelta(e);
+  if(e.ctrlKey||e.metaKey){zoomAt(V1,sx,sy,Math.exp(-dy*0.0022));return}
+  const sel=S.items.find(i=>i.id===S.sel);
+  if(sel){const [px,py]=toWorld(V1,sx,sy);
+    if(hitItem(sel,px,py,false)){sel.s=Math.max(0.01,sel.s*Math.exp(-dy*0.0015));syncProps();redraw();return}}
+  const k=kOf(V1);V1.cx+=(e.shiftKey?dy:dx)/k;V1.cy+=(e.shiftKey?0:dy)/k;clampView(V1);redrawView();
 },{passive:false});
+// окно сетки: левая, средняя и правая кнопка двигают вид; Ctrl + колесо — зум
+c2.addEventListener('pointerdown',e=>startPan(V2,e));
+c2.addEventListener('pointermove',e=>movePan(e));
+c2.addEventListener('pointerup',()=>{panning=null});
+c2.addEventListener('pointercancel',()=>{panning=null});
+c2.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const [sx,sy]=localXY(V2,e),[dx,dy]=wdelta(e);
+  if(e.ctrlKey||e.metaKey){zoomAt(V2,sx,sy,Math.exp(-dy*0.0022));return}
+  const k=kOf(V2);V2.cx+=(e.shiftKey?dy:dx)/k;V2.cy+=(e.shiftKey?0:dy)/k;clampView(V2);redrawView();
+},{passive:false});
+for(const [V,n] of [[V1,1],[V2,2]]){
+  $('fit'+n).onclick=()=>{resetView(V);redrawView()};
+  $('one'+n).onclick=()=>setZoom(V,1/k0(V));
+}
 
 // ---------- элементы ----------
-function select(id){S.sel=id;refreshList();syncProps();redraw()}
+function select(id){S.sel=id;refreshList();syncProps();redrawView()}
 function cur(){return S.items.find(i=>i.id===S.sel)||null}
 function addImage(src,name,done){
   const img=new Image();
@@ -318,14 +386,12 @@ $('apply').onclick=()=>setSize(+$('tw').value||S.W,+$('th').value||S.H);
 function setBg(v){if(!/^#[0-9a-f]{6}$/i.test(v))return;S.bg=v.toLowerCase();$('bg').value=S.bg;if(document.activeElement!==$('bgt'))$('bgt').value=S.bg;redraw()}
 $('bg').oninput=e=>{$('bgt').value=e.target.value;setBg(e.target.value)};
 $('bgt').oninput=e=>setBg(e.target.value.trim());
-function gridInputs(){S.cols=Math.min(12,Math.max(1,+$('cols').value||1));S.rows=Math.min(12,Math.max(1,+$('rows').value||1));layout();redraw()}
+function gridInputs(){S.cols=Math.min(12,Math.max(1,+$('cols').value||1));S.rows=Math.min(12,Math.max(1,+$('rows').value||1));resetView(V2);layout(false)}
 $('cols').oninput=gridInputs;$('rows').oninput=gridInputs;
 $('lines').onchange=e=>{S.lines=e.target.checked;redraw()};
 $('bord').onchange=e=>{S.bord=e.target.checked;redraw()};
-$('z1').oninput=e=>{S.z1=+e.target.value;layout();redraw()};
-$('z2').oninput=e=>{S.z2=+e.target.value;layout();redraw()};
-new ResizeObserver(()=>{layout();redraw()}).observe($('v1'));
-new ResizeObserver(()=>{layout();redraw()}).observe($('v2'));
+new ResizeObserver(()=>layout(false)).observe($('v1'));
+new ResizeObserver(()=>layout(false)).observe($('v2'));
 
 // ---------- файлы ----------
 $('add').onclick=()=>$('file').click();
@@ -363,9 +429,9 @@ $('pfile').onchange=async e=>{
 
 // ---------- старт ----------
 tileC.width=S.W;tileC.height=S.H;$('dim').textContent=S.W+'×'+S.H;
-refreshList();syncProps();layout();redraw();
+refreshList();syncProps();layout(true);redraw();
 // для автотестов
-window.__app={S,imgs,addImage,setSize,select,redraw,renderTile,tileC,instances};
+window.__app={S,imgs,addImage,setSize,select,redraw,renderTile,tileC,instances,V1,V2,kOf,toScreen,toWorld,zoomAt};
 </script>
 </body>
 </html>
