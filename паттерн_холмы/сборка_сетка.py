@@ -9,7 +9,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('--elems', default='спрайт
 ap.add_argument('--w', type=int, default=2175); ap.add_argument('--h', type=int, default=2175); ap.add_argument('--cols', type=int, default=3)
 ap.add_argument('--overlap', type=float, default=1.75); ap.add_argument('--rowfrac', type=float, default=0.15)
 ap.add_argument('--jx', type=float, default=0.05); ap.add_argument('--jy', type=float, default=0.05); ap.add_argument('--seed', type=int, default=1)
-ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10); ap.add_argument('--ramp', type=int, default=70); ap.add_argument('--halfw', type=float, default=30.0); ap.add_argument('--halfl', type=float, default=85.0)
+ap.add_argument('--tone', type=float, default=0.0); ap.add_argument('--bgcol', default='1f4358'); ap.add_argument('--dive', type=int, default=10); ap.add_argument('--ramp', type=int, default=70); ap.add_argument('--look', type=int, default=110); ap.add_argument('--halfw', type=float, default=30.0); ap.add_argument('--halfl', type=float, default=85.0)
 a = ap.parse_args(); W, H = a.w, a.h; rnd = random.Random(a.seed)
 lib = [dict(np.load(f)) for f in sorted(glob.glob(os.path.join(a.elems, '*.npz')))]; assert lib
 px = W / a.cols; rows = max(2, round(H / (px * a.overlap * a.rowfrac))); py = H / rows
@@ -43,7 +43,8 @@ for kc in (0, 1, 2):
     for n in range(N): order.append((kc, n))
 def pos(n, kc):
     r, x, y, i, fl, tone = pl[n]; h, w = I[n]['fill'].shape[:2]
-    return int(round(x - w / 2)), int(round(y + kc * H - 0)), w, h
+    ax = float(I[n]['C'][I[n]['apex'], 0])                       # вершины на регулярной шахматке: ритм ровный, холмики не съезжаются
+    return int(round(x - ax)), int(round(y + kc * H - 0)), w, h
 
 owner = np.full((TH, W), -1, np.int16)
 for k, (kc, n) in enumerate(order):
@@ -70,11 +71,25 @@ for k, (kc, n) in enumerate(order):
     def covered(t):
         X = int(round(C[t, 0])) + x0; Y = int(round(C[t, 1])) + y0
         return 0 <= Y < TH and owner[Y, X % W] > k
+    def covered_full(t):                                         # центр и оба края полосы (по нормали) накрыты
+        a_, b_ = C[max(0, t - 2)], C[min(len(C) - 1, t + 2)]; tv = b_ - a_; tv = tv / max(1e-6, np.hypot(*tv)); nv = np.array([-tv[1], tv[0]])
+        for sgn in (0, 1, -1):
+            X = int(round(C[t, 0] + sgn * nv[0] * a.halfw)) + x0; Y = int(round(C[t, 1] + sgn * nv[1] * a.halfw)) + y0
+            if not (0 <= Y < TH and owner[Y, X % W] > k): return False
+        return True
     tr, tl = len(C) - 1, 0                                       # индексы, где центр кривой впервые накрыт соседом (справа/слева от вершины)
     for t in range(ap_, len(C)):
-        if covered(t): tr = t; break
+        if covered(t):
+            tr = t
+            for u in range(t, min(len(C), t + a.look)):
+                if covered_full(u): tr = u; break
+            break
     for t in range(ap_, -1, -1):
-        if covered(t): tl = t; break
+        if covered(t):
+            tl = t
+            for u in range(t, max(-1, t - a.look), -1):
+                if covered_full(u): tl = u; break
+            break
     cuts.append((tl, tr))
     stroke = d['stroke'].copy(); nm = d['nmap'].astype(np.int32)
     hh_, ww_ = nm.shape; yy_, xx_ = np.mgrid[0:hh_, 0:ww_]
