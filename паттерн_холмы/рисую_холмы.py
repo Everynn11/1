@@ -41,6 +41,20 @@ def contour(arc, W):
     return np.vstack([Lm[:len(Lm) - len(pts)], R])
 
 
+def convex_top(P):
+    """Верхняя выпуклая оболочка контура: убирает вогнутости и перегибы по верху, оставляет округлый купол."""
+    from scipy.spatial import ConvexHull
+    h = ConvexHull(P); v = list(h.vertices); pts = P[v]
+    l = int(np.argmin(pts[:, 0])); r = int(np.argmax(pts[:, 0])); t = int(np.argmin(pts[:, 1])); n = len(v)
+    def walk(a_, b_, step):
+        out = [a_]
+        while out[-1] != b_: out.append((out[-1] + step) % n)
+        return out
+    ch = walk(l, r, 1)
+    if t not in ch: ch = walk(l, r, -1)
+    return pts[ch]
+
+
 def resample(P, step):
     d = np.r_[0, np.cumsum(np.hypot(*np.diff(P, axis=0).T))]; s = np.arange(0, d[-1], step)
     return np.c_[np.interp(s, d, P[:, 0]), np.interp(s, d, P[:, 1])], d[-1]
@@ -62,7 +76,9 @@ def stroke(shape, C, widths, soft=0.0):
 
 
 def make_sprite(arc, idx):
-    W = a.width * SS; P = contour(arc, W); top = P[:, 1].min(); bw = P[:, 0].max() - P[:, 0].min()
+    W = a.width * SS; P = contour(arc, W)
+    P, _ = resample(convex_top(P), 2.0 * SS); P = ndi.gaussian_filter1d(P, sigma=12, axis=0, mode='nearest')      # выпуклый и скруглённый верх
+    top = P[:, 1].min(); bw = P[:, 0].max() - P[:, 0].min()
     base = max(top + 1.5 * W * 0.55, P[:, 1].max() + 0.25 * W); pad = int(0.08 * W)
     x0 = P[:, 0].min() - pad; Hs = int(base - top + 2 * pad); Ws = int(bw + 2 * pad)
     Q = P - np.array([x0, top - pad])
@@ -74,7 +90,7 @@ def make_sprite(arc, idx):
     # полоса и линии по кривой
     C, L = resample(Q, 3.0 * SS / 2); s = np.linspace(0, 1, len(C))
     C = ndi.gaussian_filter1d(C, sigma=7, axis=0, mode='nearest')            # гладкая кривая: без изломов от разреженных точек дуги
-    taper = np.clip((np.minimum(s, 1 - s) / 0.10) ** 0.6, 0.18, 1)
+    taper = np.clip((np.minimum(s, 1 - s) / 0.07) ** 0.5, 0.62, 1)
     tilt = 1 + 0.28 * (2 * s - 1) * rng.choice([-1, 1])
     bw_s = 0.095 * W * taper * tilt                                          # гладкая ширина (по ней идут светлые линии)
     bw_ = bw_s * (1 + 0.07 * ndi.gaussian_filter(rng.normal(0, 1, len(C)), 25) / 0.1)   # у самой полосы лёгкая живая неровность, без зубцов
@@ -90,7 +106,11 @@ def make_sprite(arc, idx):
         m, _ = stroke((Hs, Ws), Ck, wk); m = ndi.gaussian_filter(m, 0.7 * SS / 2) * fmask
         colr = WHITE if k % 2 == 0 else MINT; col_f = col_f * (1 - m[..., None]) + colr * m[..., None]
     # тёмная полоса с неровным краем
-    bm, _ = stroke((Hs, Ws), C, bw_); b = ndi.gaussian_filter(bm, 1.3 * SS / 2); nz = ndi.gaussian_filter(rng.normal(0, 1, (Hs, Ws)), 5.0 * SS / 2) * 4.0
+    bm, _ = stroke((Hs, Ws), C, bw_)
+    _bi = Image.fromarray((bm * 255).astype(np.uint8)); _d = ImageDraw.Draw(_bi)
+    for _k in (0, -1): _d.ellipse([C[_k][0] - bw_[_k] / 2, C[_k][1] - bw_[_k] / 2, C[_k][0] + bw_[_k] / 2, C[_k][1] + bw_[_k] / 2], fill=255)   # круглые заглушки: концы полосы тупые, без игл
+    bm = np.array(_bi).astype(float) / 255
+    b = ndi.gaussian_filter(bm, 1.3 * SS / 2); nz = ndi.gaussian_filter(rng.normal(0, 1, (Hs, Ws)), 5.0 * SS / 2) * 4.0
     bmask = np.clip((b - 0.5 + 0.045 * nz) / 0.18 + 0.5, 0, 1)
     bcol = BAND[None, None, :] * (1 + 0.05 * f[..., None]) + rng.normal(0, 1.2, (Hs, Ws, 1))
     rgb = col_f * (1 - bmask[..., None]) + bcol * bmask[..., None]
