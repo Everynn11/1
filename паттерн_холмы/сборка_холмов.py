@@ -17,6 +17,8 @@ ap.add_argument('--rowfrac', type=float, default=0.42)    # шаг рядов / 
 ap.add_argument('--jx', type=float, default=0.14); ap.add_argument('--jy', type=float, default=0.12)   # разброс положения, доли шага
 ap.add_argument('--scale', type=float, default=0.15); ap.add_argument('--rot', type=float, default=5.0)
 ap.add_argument('--tone', type=float, default=0.09)       # разброс яркости холмика
+ap.add_argument('--rowjit', type=float, default=0.18)     # случайный сдвиг всего ряда, доли шага (0 = строгая шахматка)
+ap.add_argument('--chan', type=float, default=0.03)       # разброс оттенка по каналам RGB
 ap.add_argument('--bgcol', default='1f4358')              # цвет ТОЛЬКО на случай дыр; дыр быть не должно (см. --skirt, проверяется)
 ap.add_argument('--skirt', type=float, default=2.2)       # минимальная длина холмика с юбкой, в шагах рядов; при дырах растёт само
 ap.add_argument('--wash', type=float, default=0.05); ap.add_argument('--grain', type=float, default=2.0)
@@ -38,7 +40,7 @@ used = [0] * len(lib)
 def tdist(x1, y1, x2, y2):
     dx = abs(x1 - x2); dx = min(dx, W - dx); dy = abs(y1 - y2); dy = min(dy, H - dy); return math.hypot(dx, dy)
 for r in range(rows):
-    rowshift = (r % 2) * px / 2 + rnd.uniform(-0.18, 0.18) * px
+    rowshift = (r % 2) * px / 2 + rnd.uniform(-a.rowjit, a.rowjit) * px
     for c in range(a.cols):
         x = (c * px + rowshift + rnd.uniform(-a.jx, a.jx) * px) % W
         y = r * py + rnd.uniform(-a.jy, a.jy) * py
@@ -49,7 +51,7 @@ for r in range(rows):
             if all(not (p[3] == i and tdist(x, y % H, p[1], p[2] % H) < 2.6 * px) for p in pl): pick = i; break
         if pick is None: pick = cand[0]
         used[pick] += 1
-        pl.append((r, x, y, pick, 1 + rnd.uniform(-a.scale, a.scale), rnd.uniform(-a.rot, a.rot), rnd.random() < 0.5, 1 + rnd.uniform(-a.tone, a.tone), rnd.uniform(0.97, 1.03), rnd.uniform(0.97, 1.03), rnd.uniform(0.97, 1.03)))
+        pl.append((r, x, y, pick, 1 + rnd.uniform(-a.scale, a.scale), rnd.uniform(-a.rot, a.rot), rnd.random() < 0.5, 1 + rnd.uniform(-a.tone, a.tone), 1 + rnd.uniform(-a.chan, a.chan), 1 + rnd.uniform(-a.chan, a.chan), 1 + rnd.uniform(-a.chan, a.chan)))
 
 def make(p, sk):
     r, x, y, i, sc, rot, fl, tone, t1, t2, t3 = p
