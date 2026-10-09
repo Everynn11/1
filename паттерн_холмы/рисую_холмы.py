@@ -68,10 +68,11 @@ def fbm(h, w, scales=(70, 26, 9), amps=(1, .55, .3)):
     return o / sum(amps)
 
 
-def stroke(shape, C, widths, soft=0.0):
+def stroke(shape, C, widths, soft=0.0, widths_in=None):
     """Полигон вдоль кривой C с переменной шириной; возвращает маску 0..1."""
     t = np.gradient(C, axis=0); t /= np.maximum(1e-6, np.hypot(*t.T))[:, None]; nrm = np.c_[-t[:, 1], t[:, 0]]
-    poly = [tuple(p) for p in C + nrm * (widths / 2)[:, None]] + [tuple(p) for p in (C - nrm * (widths / 2)[:, None])[::-1]]
+    win = widths if widths_in is None else widths_in
+    poly = [tuple(p) for p in C + nrm * (win / 2)[:, None]] + [tuple(p) for p in (C - nrm * (widths / 2)[:, None])[::-1]]
     im = Image.new('L', (shape[1], shape[0]), 0); ImageDraw.Draw(im).polygon(poly, fill=255); return np.array(im).astype(float) / 255, nrm
 
 
@@ -97,12 +98,18 @@ def make_sprite(arc, idx):
     C = C[_l:_r + 1]; s = np.linspace(0, 1, len(C))                        # полоса только по верху и пологой части плеч, без хвостов вниз            # гладкая кривая: без изломов от разреженных точек дуги
     taper = np.clip((np.minimum(s, 1 - s) / 0.22) ** 0.9, 0.62, 1)
     tilt = 1 + 0.28 * (2 * s - 1) * rng.choice([-1, 1])
-    bw_s = a.bandw * SS * taper * tilt                                          # гладкая ширина (по ней идут светлые линии)
-    bw_ = bw_s * (1 + 0.07 * ndi.gaussian_filter(rng.normal(0, 1, len(C)), 25) / 0.1)   # у самой полосы лёгкая живая неровность, без зубцов
+    base = rng.uniform(0.80, 1.25)                                           # у каждого холмика своя толщина полосы
+    def wob(sig, amp):                                                       # плавная случайная кривая вдоль линии, значения около 0, размах ~amp
+        v = ndi.gaussian_filter1d(rng.normal(0, 1, len(C)), sig, mode='nearest'); return amp * v / max(1e-6, np.abs(v).max())
+    along = 1 + wob(60, 0.22)                                                # толщина плавно гуляет вдоль линии
+    bw_in = a.bandw * SS * base * taper * tilt * along * (1 + wob(26, 0.12))   # внутренний край: своя лёгкая волна (по нему идут светлые линии)
+    bw_out = a.bandw * SS * base * taper * tilt * along * (1 + wob(34, 0.14))  # внешний край: другая волна, полоса неровная
+    bw_s = bw_in                                                              # светлые линии отсчитываются от внутреннего края
+    bw_ = bw_out
     # светлые линии: 1-3, сразу под тёмной полосой, поверх заливки
     nlines = int(rng.choice([1, 2, 2, 3])); lw = 20 * SS; lrgb = np.zeros((Hs, Ws, 3)); la = np.zeros((Hs, Ws))
     for k in range(nlines):
-        off = bw_s * 0.5 + lw * (0.55 + 1.05 * k)
+        off = bw_in * 0.5 + lw * (0.55 + 1.05 * k)
         wob = ndi.gaussian_filter(rng.normal(0, 1, len(C)), 8) * 0.18 * lw
         t_ = np.gradient(C, axis=0); t_ /= np.maximum(1e-6, np.hypot(*t_.T))[:, None]; nm = np.c_[-t_[:, 1], t_[:, 0]]
         Ck = C + nm * (off + wob)[:, None]
@@ -111,7 +118,7 @@ def make_sprite(arc, idx):
         m, _ = stroke((Hs, Ws), Ck, wk); m = ndi.gaussian_filter(m, 0.7 * SS / 2) * fmask
         colr = WHITE if k % 2 == 0 else MINT; lrgb = lrgb * (1 - m[..., None]) + colr * m[..., None]; la = la + m * (1 - la)
     # тёмная полоса с неровным краем
-    bm, _ = stroke((Hs, Ws), C, bw_)
+    bm, _ = stroke((Hs, Ws), C, bw_, widths_in=bw_in)
     b = ndi.gaussian_filter(bm, 1.3 * SS / 2); nz = ndi.gaussian_filter(rng.normal(0, 1, (Hs, Ws)), 5.0 * SS / 2) * 4.0
     bmask = np.clip((b - 0.5 + 0.045 * nz) / 0.18 + 0.5, 0, 1)
     bcol = BAND[None, None, :] * (1 + 0.05 * f[..., None]) + rng.normal(0, 1.2, (Hs, Ws, 1))
